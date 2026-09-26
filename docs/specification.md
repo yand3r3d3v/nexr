@@ -283,7 +283,12 @@ registry URL is a usage error with a hint.
 **FR-PAT-1 (M).** Every pattern flag (`--match`, `--include`, `--exclude`) accepts glob syntax:
 `*`, `?`, `[…]`, and `**` for any number of path segments. A pattern prefixed with `re:` is an RE2
 regular expression instead, e.g. `--exclude 're:^v\d+\.\d+\.\d+$'`. Path patterns match the path
-relative to the command's base directory, using `/` separators.
+relative to the command's base directory, using `/` separators, with the rules of `.gitignore`: a
+glob without `/` matches the last segment at any depth (`--exclude '*.log'` excludes `a.log` and
+`logs/b.log`, `--exclude node_modules` skips every `node_modules` directory), a glob with `/`
+matches the whole relative path (`build/*.map`), and a leading `/` anchors a glob to the base
+directory (`/*.log` excludes only top-level `.log` files). Regular expressions always match the
+whole relative path.
 
 **FR-PAT-2 (M).** Duration flags accept Go duration syntax plus days and weeks: `90m`, `36h`, `30d`,
 `2w`.

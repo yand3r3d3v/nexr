@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Repo is a repository known to the fake.
@@ -22,13 +23,17 @@ type Repo struct {
 	Format string
 	Type   string
 	Online bool
+	// WritePolicy is "ALLOW" (the default when empty), "ALLOW_ONCE" or "DENY".
+	WritePolicy string
 	// Settings is returned by GET /v1/repositories/{format}/{type}/{name}.
 	Settings map[string]any
 }
 
 type user struct {
-	password string
-	admin    bool
+	name      string
+	password  string
+	admin     bool
+	anonymous bool
 }
 
 // Server is a fake Nexus instance.
@@ -47,6 +52,10 @@ type Server struct {
 	readable    bool
 	writable    bool
 	repos       map[string]Repo
+	files       map[string]map[string]*storedFile // repository → path → file
+	seq         int
+	clock       func() time.Time
+	noBrowse    bool
 	requests    []string
 }
 
@@ -63,6 +72,17 @@ func WithContextPath(p string) Option {
 // Nexus 3.96 does (default 3). Zero disables the rate limit.
 func WithAuthRateLimit(maxAttempts int) Option {
 	return func(s *Server) { s.maxAttempts = maxAttempts }
+}
+
+// WithoutBrowseAPI answers the Browse API with 404, as releases before it
+// (3.71) do.
+func WithoutBrowseAPI() Option {
+	return func(s *Server) { s.noBrowse = true }
+}
+
+// WithClock sets the clock used for the timestamps of stored files.
+func WithClock(now func() time.Time) Option {
+	return func(s *Server) { s.clock = now }
 }
 
 // WithVersion sets the version and edition reported in the Server header.
@@ -82,9 +102,10 @@ func New(t testing.TB, opts ...Option) *Server {
 	t.Helper()
 	s := &Server{
 		version: "3.96.3-01", edition: "COMMUNITY",
-		users:    map[string]user{"admin": {password: "admin123", admin: true}},
+		users:    map[string]user{"admin": {name: "admin", password: "admin123", admin: true}},
 		readable: true, writable: true,
 		repos:       map[string]Repo{},
+		files:       map[string]map[string]*storedFile{},
 		maxAttempts: 3,
 		failures:    map[string]int{},
 	}
@@ -104,7 +125,7 @@ func (s *Server) BaseURL() string { return s.URL + s.contextPath }
 func (s *Server) AddUser(name, password string, admin bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.users[name] = user{password: password, admin: admin}
+	s.users[name] = user{name: name, password: password, admin: admin}
 	delete(s.failures, name)
 }
 
@@ -147,9 +168,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Server", *s.serverHdr)
 	}
 
+	if strings.HasPrefix(r.URL.Path, s.contextPath+"/repository/") {
+		s.content(w, r)
+		return
+	}
 	path, ok := strings.CutPrefix(r.URL.Path, s.contextPath+"/service/rest")
-	if !ok || r.Method != http.MethodGet {
+	if !ok {
 		s.htmlNotFound(w)
+		return
+	}
+	if r.Method != http.MethodGet {
+		s.modify(w, r, path)
 		return
 	}
 	switch {
@@ -175,20 +204,53 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.authenticate(w, r); ok {
 			s.listRepos(w)
 		}
+	case path == "/v1/assets":
+		if _, ok := s.authenticate(w, r); ok {
+			s.listAssets(w, r)
+		}
+	case path == "/v1/search/assets":
+		if _, ok := s.authenticate(w, r); ok {
+			s.searchAssets(w, r)
+		}
 	case strings.HasPrefix(path, "/v1/repositories/"):
 		u, ok := s.authenticate(w, r)
 		if !ok {
 			return
 		}
 		parts := strings.Split(strings.TrimPrefix(path, "/v1/repositories/"), "/")
-		switch len(parts) {
-		case 1:
+		switch {
+		case len(parts) == 1:
 			s.getRepo(w, parts[0])
-		case 3:
+		case len(parts) == 2 && parts[1] == "browse":
+			s.browse(w, r, parts[0])
+		case len(parts) == 3:
 			s.getRepoSettings(w, u, parts[0], parts[1], parts[2])
 		default:
 			s.siesta(w, http.StatusNotFound)
 		}
+	default:
+		s.siesta(w, http.StatusNotFound)
+	}
+}
+
+// modify routes the REST requests that change data.
+func (s *Server) modify(w http.ResponseWriter, r *http.Request, path string) {
+	u, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	switch {
+	case r.Method == http.MethodDelete && len(parts) == 3 && parts[0] == "v1" && parts[1] == "assets":
+		s.deleteAsset(w, u, parts[2])
+	case r.Method == http.MethodDelete && len(parts) == 4 && parts[1] == "repositories" && parts[3] == "browse":
+		s.deleteFolder(w, r, u, parts[2])
+	case r.Method == http.MethodPost && path == "/v1/components":
+		if u.anonymous {
+			s.siesta(w, http.StatusForbidden)
+			return
+		}
+		s.uploadComponent(w, r, u)
 	default:
 		s.siesta(w, http.StatusNotFound)
 	}
@@ -224,7 +286,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (user, boo
 			return user{}, false
 		}
 	} else if s.anonymous {
-		return user{}, true
+		return user{name: "anonymous", anonymous: true}, true
 	}
 	w.Header().Set("WWW-Authenticate", `BASIC realm="Sonatype Nexus Repository Manager"`)
 	w.WriteHeader(http.StatusUnauthorized)

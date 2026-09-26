@@ -25,6 +25,7 @@ type Client struct {
 	base    *url.URL
 	hc      *http.Client
 	timeout time.Duration
+	idle    time.Duration // idle timeout of file transfers
 
 	mu         sync.Mutex
 	nexusHdr   string // last Server header that came from Nexus

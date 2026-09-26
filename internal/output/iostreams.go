@@ -2,6 +2,7 @@
 package output
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ type IOStreams struct {
 	stdoutTTY bool
 	stderrTTY bool
 	noColor   bool
+	inReader  *bufio.Reader // buffers stdin for prompts
 }
 
 // System returns streams bound to the process's stdin, stdout and stderr.

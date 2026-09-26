@@ -25,6 +25,7 @@ type invocation struct {
 	stdin     string
 	ctx       context.Context
 	transport http.RoundTripper
+	tty       bool // stdin, stdout and stderr are terminals
 }
 
 type result struct {
@@ -41,6 +42,9 @@ func (inv invocation) run(t *testing.T, args ...string) result {
 	t.Helper()
 	ios, in, out, errOut := output.Test()
 	in.WriteString(inv.stdin)
+	if inv.tty {
+		ios.SetTTY(true, true, true)
+	}
 	f := cmdutil.New(ios)
 	f.Getenv = func(k string) string { return inv.env[k] }
 	f.Transport = inv.transport

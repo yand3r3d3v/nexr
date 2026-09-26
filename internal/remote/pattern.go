@@ -9,10 +9,14 @@ import (
 
 // Pattern matches names or paths. It is a glob (*, ?, [...] and ** for any
 // number of path segments) or, with the prefix "re:", an RE2 regular
-// expression (docs/specification.md, FR-PAT-1).
+// expression (docs/specification.md, FR-PAT-1). As in .gitignore, a glob
+// without "/" matches the last segment of a path at any depth, a glob with
+// "/" matches the whole path, and a leading "/" anchors a glob to the base
+// directory.
 type Pattern struct {
-	raw string
-	re  *regexp.Regexp
+	raw  string
+	re   *regexp.Regexp
+	base bool // match the last path segment only
 }
 
 // ParsePattern compiles a pattern.
@@ -24,11 +28,12 @@ func ParsePattern(s string) (Pattern, error) {
 		}
 		return Pattern{raw: s, re: re}, nil
 	}
-	re, err := globToRegexp(s)
+	glob := strings.TrimPrefix(s, "/")
+	re, err := globToRegexp(glob)
 	if err != nil {
 		return Pattern{}, err
 	}
-	return Pattern{raw: s, re: re}, nil
+	return Pattern{raw: s, re: re, base: !strings.Contains(s, "/")}, nil
 }
 
 // ParsePatterns compiles several patterns.
@@ -44,11 +49,39 @@ func ParsePatterns(list []string) ([]Pattern, error) {
 	return out, nil
 }
 
-// Match reports whether s matches the pattern.
-func (p Pattern) Match(s string) bool { return p.re.MatchString(s) }
+// Match reports whether s, a name or a "/"-separated path, matches.
+func (p Pattern) Match(s string) bool {
+	if p.base {
+		s = s[strings.LastIndex(s, "/")+1:]
+	}
+	return p.re.MatchString(s)
+}
 
 // String returns the pattern as given.
 func (p Pattern) String() string { return p.raw }
+
+// MatchTree reports whether a pattern matches the relative path rel or one of
+// its parent directories, so that "--exclude build" also excludes the files
+// below every directory named build.
+func MatchTree(patterns []Pattern, rel string) bool {
+	for {
+		if MatchAny(patterns, rel) {
+			return true
+		}
+		i := strings.LastIndex(rel, "/")
+		if i < 0 {
+			return false
+		}
+		rel = rel[:i]
+	}
+}
+
+// Selected applies --include and --exclude to a relative path: it is kept
+// when it matches an include pattern (or there are none) and no exclude
+// pattern, each also through its parent directories.
+func Selected(include, exclude []Pattern, rel string) bool {
+	return (len(include) == 0 || MatchTree(include, rel)) && !MatchTree(exclude, rel)
+}
 
 // MatchAny reports whether s matches any of the patterns.
 func MatchAny(patterns []Pattern, s string) bool {

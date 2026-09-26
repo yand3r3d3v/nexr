@@ -11,6 +11,7 @@ import (
 	"github.com/yand3r3d3v/nexr/internal/buildinfo"
 	"github.com/yand3r3d3v/nexr/internal/cli/cmdutil"
 	"github.com/yand3r3d3v/nexr/internal/cli/configcmd"
+	"github.com/yand3r3d3v/nexr/internal/cli/filescmd"
 	"github.com/yand3r3d3v/nexr/internal/cli/reposcmd"
 	"github.com/yand3r3d3v/nexr/internal/cli/statuscmd"
 	"github.com/yand3r3d3v/nexr/internal/cli/versioncmd"
@@ -32,6 +33,8 @@ flags. Run "nexr status" to check the connection.`,
 		Example: `  export NEXUS_URL=https://nexus.example.com NEXUS_USER=ci NEXUS_PASSWORD=...
   nexr status
   nexr repos --format raw
+  nexr up ./dist raw-releases/myapp/1.4.0/
+  nexr ls -l raw-releases/myapp/
   nexr --profile staging repos --json`,
 		Version:       buildinfo.Get().Version,
 		SilenceErrors: true,
@@ -76,6 +79,7 @@ flags. Run "nexr status" to check the connection.`,
 		return cfg.ProfileNames(), cobra.ShellCompDirectiveNoFileComp
 	})
 
+	cmd.AddCommand(filescmd.New(f)...)
 	cmd.AddCommand(
 		reposcmd.New(f),
 		statuscmd.New(f),
