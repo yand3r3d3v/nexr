@@ -491,6 +491,23 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// Behind nginx the Server header of Nexus is replaced; the version comes from
+// the API description, and the edition is unknown.
+func TestStatusBehindProxy(t *testing.T) {
+	fake := nexustest.New(t, nexustest.WithServerHeader("nginx"))
+	inv := admin(t, fake)
+	r := inv.run(t, "status")
+	mustExit(t, r, 0)
+	mustContain(t, r, "stdout", "Server:        Nexus Repository 3.96.3-01\n")
+	r = inv.run(t, "status", "--json")
+	st := decode[struct {
+		Server map[string]*string `json:"server"`
+	}](t, r, r.stdout)
+	if h, v := st.Server["header"], st.Server["version"]; h == nil || *h != "nginx" || v == nil || *v != "3.96.3-01" || st.Server["edition"] != nil {
+		t.Fatalf("unexpected JSON\n%s", r)
+	}
+}
+
 func TestNetworkErrors(t *testing.T) {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	closed.Close()

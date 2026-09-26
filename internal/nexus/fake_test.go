@@ -75,8 +75,8 @@ func TestAgainstFake(t *testing.T) {
 	if h, err := wrong.Health(ctx); err != nil || !h.Readable {
 		t.Fatalf("health with wrong credentials = %+v %v", h, err)
 	}
-	if s := anon.Server(); s.Version != "3.96.3-01" {
-		t.Fatalf("server = %+v", s)
+	if s, err := anon.Server(ctx); err != nil || s.Version != "3.96.3-01" {
+		t.Fatalf("server = %+v, %v", s, err)
 	}
 }
 

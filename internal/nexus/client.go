@@ -26,8 +26,10 @@ type Client struct {
 	hc      *http.Client
 	timeout time.Duration
 
-	mu     sync.Mutex
-	server string // last Server header seen
+	mu         sync.Mutex
+	nexusHdr   string // last Server header that came from Nexus
+	lastHdr    string // last Server header of any kind (a proxy may replace it)
+	apiVersion string // version from the API description, once read
 }
 
 // New returns a client for the Nexus instance at baseURL (which may include a
@@ -59,18 +61,13 @@ func (c *Client) URL(path string, q url.Values) string {
 }
 
 func (c *Client) recordServer(resp *http.Response) {
-	if s := resp.Header.Get("Server"); strings.HasPrefix(s, "Nexus/") {
-		c.mu.Lock()
-		c.server = s
-		c.mu.Unlock()
-	}
-}
-
-// Server returns what is known about the server from its responses.
-func (c *Client) Server() ServerInfo {
+	s := resp.Header.Get("Server")
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return ParseServer(c.server)
+	c.lastHdr = s
+	if strings.HasPrefix(s, "Nexus/") {
+		c.nexusHdr = s
+	}
 }
 
 // Do sends a request and returns the response. Non-2xx responses are turned

@@ -18,7 +18,8 @@ JSON output may change between minor versions.
 - Retries of idempotent requests with backoff and `Retry-After` support; `-v`/`-vv` request logging
   with secrets redacted.
 - `nexr status`: server version and edition, read/write availability, credential check and the
-  number of visible repositories; detects the authentication rate limit of Nexus 3.96.
+  number of visible repositories; detects the authentication rate limit of Nexus 3.96. Behind a
+  reverse proxy that replaces the `Server` header, the version is read from the API description.
 - A `429 Too many authentication attempts` from Nexus 3.96 is never retried and is explained,
   because every further request would keep the user blocked.
 - `nexr repos`, `nexr repos ls` and `nexr repos show`.

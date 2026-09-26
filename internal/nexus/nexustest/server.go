@@ -38,6 +38,7 @@ type Server struct {
 	mu          sync.Mutex
 	version     string
 	edition     string
+	serverHdr   *string // replaces the Server header when set
 	contextPath string
 	users       map[string]user
 	anonymous   bool
@@ -67,6 +68,12 @@ func WithAuthRateLimit(maxAttempts int) Option {
 // WithVersion sets the version and edition reported in the Server header.
 func WithVersion(version, edition string) Option {
 	return func(s *Server) { s.version, s.edition = version, edition }
+}
+
+// WithServerHeader replaces the Server header, as a reverse proxy such as
+// nginx does; "" removes it.
+func WithServerHeader(header string) Option {
+	return func(s *Server) { s.serverHdr = &header }
 }
 
 // New starts a fake Nexus that is closed when the test ends. It has one admin
@@ -133,7 +140,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests = append(s.requests, r.Method+" "+r.URL.Path)
-	w.Header().Set("Server", fmt.Sprintf("Nexus/%s (%s)", s.version, s.edition))
+	switch {
+	case s.serverHdr == nil:
+		w.Header().Set("Server", fmt.Sprintf("Nexus/%s (%s)", s.version, s.edition))
+	case *s.serverHdr != "":
+		w.Header().Set("Server", *s.serverHdr)
+	}
 
 	path, ok := strings.CutPrefix(r.URL.Path, s.contextPath+"/service/rest")
 	if !ok || r.Method != http.MethodGet {
@@ -141,6 +153,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case path == "/swagger.json":
+		// The API description needs no credentials, even with anonymous
+		// access disabled.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"openapi": "3.0.1",
+			"info":    map[string]any{"title": "Nexus Repository Manager REST API", "version": s.version},
+			"paths":   map[string]any{},
+		})
 	case path == "/v1/status":
 		// Anonymous requests are allowed, wrong credentials are not.
 		if _, _, has := r.BasicAuth(); has {

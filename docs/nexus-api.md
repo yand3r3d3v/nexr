@@ -57,6 +57,14 @@ It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.71.
 
 * Every response carries a `Server` header, e.g. `Nexus/3.96.3-01 (COMMUNITY)` or
   `Nexus/3.71.0-06 (OSS)`. Pro servers report their edition in the same place *(not verified)*.
+  **Reverse proxies often replace it** (nginx sends its own `Server` header unless configured with
+  `proxy_pass_header Server;`).
+* The API description `GET /service/rest/swagger.json` names the version in `info.version`
+  (`"3.96.3-01"`, `"3.71.0-06"`), near the start of the document, and needs no credentials even when
+  anonymous access is disabled. 3.96 serves OpenAPI 3.0.1 (about 15 KB), 3.71 Swagger 2.0 (about
+  370 KB). The edition is not included. On 3.96 the first request after a restart once failed with
+  `500` (`ConcurrentModificationException` while the description was built); the next ones
+  succeeded. `nexr` reads the version from here when the `Server` header does not come from Nexus.
 * `GET /v1/status` → `200` when the server can serve reads, `503` otherwise. **Anonymous access is
   allowed**, even when anonymous access to repositories is disabled.
 * `GET /v1/status/writable` → `200`/`503` for writes. Also anonymous.

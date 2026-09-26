@@ -181,12 +181,68 @@ func TestRepositoriesAndServerInfo(t *testing.T) {
 	if len(repos) != 2 || repos[0].Name != "alpha" || repos[0].Online == nil || !*repos[0].Online || repos[1].Online != nil {
 		t.Fatalf("repos = %+v", repos)
 	}
-	if s := c.Server(); s.Version != "3.96.3-01" || s.Edition != "COMMUNITY" {
-		t.Fatalf("server = %+v", s)
+	if s, err := c.Server(context.Background()); err != nil || s.Version != "3.96.3-01" || s.Edition != "COMMUNITY" {
+		t.Fatalf("server = %+v, %v", s, err)
 	}
 	settings, err := c.RepositorySettings(context.Background(), Repository{Name: "maven-releases", Format: "maven2", Type: "hosted"})
 	if err != nil || settings["storage"] == nil {
 		t.Fatalf("settings = %v, %v", settings, err)
+	}
+}
+
+// Reverse proxies such as nginx replace the Server header of Nexus; the version
+// then comes from the API description, read without credentials.
+func TestServerBehindProxy(t *testing.T) {
+	for _, tt := range []struct{ name, doc string }{
+		{"OpenAPI 3 (3.96)", `{"openapi":"3.0.1","info":{"title":"Nexus Repository Manager REST API","version":"3.96.3-01"},"paths":{"/v1/x":{}}}`},
+		{"Swagger 2 (3.71)", `{"swagger":"2.0","info":{"version":"3.71.0-06","title":"Nexus Repository Manager REST API"},"basePath":"/service/rest/"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var docs, withAuth int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Server", "nginx/1.27.0")
+				if r.URL.Path == "/nexus/service/rest/swagger.json" {
+					docs++
+					if r.Header.Get("Authorization") != "" {
+						withAuth++
+					}
+					fmt.Fprint(w, tt.doc)
+					return
+				}
+				fmt.Fprint(w, `[]`)
+			}))
+			defer srv.Close()
+			hc, _ := httpx.NewClient(httpx.Options{
+				Username: "alice", Password: func() (string, error) { return "pw", nil }, AuthURLs: []string{srv.URL},
+			})
+			c, _ := New(srv.URL+"/nexus", hc, time.Second)
+			if _, err := c.Repositories(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.SplitN(strings.SplitN(tt.doc, `"version":"`, 2)[1], `"`, 2)[0]
+			for range 2 {
+				s, err := c.Server(context.Background())
+				if err != nil || s.Version != want || s.Edition != "" || s.Header != "nginx/1.27.0" {
+					t.Fatalf("server = %+v, %v", s, err)
+				}
+			}
+			if docs != 1 || withAuth != 0 {
+				t.Fatalf("the API description was read %d times, %d with credentials", docs, withAuth)
+			}
+		})
+	}
+}
+
+func TestServerVersionUnavailable(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/service/rest/swagger.json" {
+			fmt.Fprint(w, `{"info":{"version":"not a version"}}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	if s, err := c.Server(context.Background()); err == nil || s.Version != "" {
+		t.Fatalf("server = %+v, %v; want an error", s, err)
 	}
 }
 

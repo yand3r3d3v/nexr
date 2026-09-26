@@ -14,10 +14,16 @@ import (
 	"github.com/yand3r3d3v/nexr/internal/output"
 )
 
+type serverJSON struct {
+	Header  *string `json:"header"`
+	Version *string `json:"version"`
+	Edition *string `json:"edition"`
+}
+
 type statusJSON struct {
 	URL          string            `json:"url"`
 	Profile      *string           `json:"profile"`
-	Server       nexus.ServerInfo  `json:"server"`
+	Server       serverJSON        `json:"server"`
 	Readable     bool              `json:"readable"`
 	Writable     bool              `json:"writable"`
 	Auth         *string           `json:"auth"` // "accepted", "anonymous", "rejected", "blocked"
@@ -81,7 +87,11 @@ func run(cmd *cobra.Command, f *cmdutil.Factory) error {
 	} else {
 		failure = errs.New(errs.KindGeneric, "Nexus at %s reports that it is not available", cfg.URL.Value)
 	}
-	st.Server = nx.Server()
+	server, err := nx.Server(ctx)
+	if err != nil && f.Flags.Verbose > 0 {
+		f.IO.Warnf("cannot determine the server version: %v", err)
+	}
+	st.Server = serverJSON{Header: nullable(server.Header), Version: nullable(server.Version), Edition: nullable(server.Edition)}
 
 	if f.JSON() {
 		if err := output.WriteJSON(f.IO.Out, st, f.IO.IsStdoutTTY()); err != nil {
@@ -152,10 +162,10 @@ func printTable(f *cmdutil.Factory, st statusJSON) error {
 		t.AddRow("Profile:", fmt.Sprintf("%s (from %s)", cfg.Profile, cfg.ProfileOrigin))
 	}
 	server := "unknown"
-	if st.Server.Version != "" {
-		server = "Nexus Repository " + st.Server.Version
-		if st.Server.Edition != "" {
-			server += " (" + st.Server.Edition + ")"
+	if st.Server.Version != nil {
+		server = "Nexus Repository " + *st.Server.Version
+		if st.Server.Edition != nil {
+			server += " (" + *st.Server.Edition + ")"
 		}
 	}
 	t.AddRow("Server:", server)
@@ -177,6 +187,13 @@ func printTable(f *cmdutil.Factory, st statusJSON) error {
 		t.AddRow("Repositories:", fmt.Sprintf("%d visible", *st.Repositories))
 	}
 	return t.Render()
+}
+
+func nullable(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func availability(ok bool) string {
