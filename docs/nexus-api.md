@@ -60,6 +60,10 @@ It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.71.
 * `GET /v1/status` → `200` when the server can serve reads, `503` otherwise. **Anonymous access is
   allowed**, even when anonymous access to repositories is disabled.
 * `GET /v1/status/writable` → `200`/`503` for writes. Also anonymous.
+* **Wrong credentials.** `GET /v1/status` with wrong Basic credentials (wrong password or unknown
+  user) answers `401`, although the endpoint needs none. `GET /v1/status/writable` does the same on
+  3.71 but ignores wrong credentials on 3.96 (`200`). `nexr status` therefore checks health without
+  credentials and checks the credentials with a separate request.
 * `GET /v1/status/check` → detailed health checks (`{"Available CPUs": {"healthy": true, …}, …}`).
   Requires authentication (anonymous request → `401`).
 
@@ -75,7 +79,49 @@ It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.71.
 * Anonymous access (`GET /v1/security/anonymous`) was **disabled** on a fresh 3.96 server and
   **enabled** on a fresh 3.71 server. Test setups must set it explicitly
   (`PUT /v1/security/anonymous`).
+* **Requests without credentials when anonymous access is disabled** differ between releases:
+
+  | Request without credentials | 3.71 | 3.96 |
+  |---|---|---|
+  | `GET /v1/repositories`, `GET /v1/search` | `200` with an empty list | `401` |
+  | other protected endpoints (`/v1/repositories/{name}`, `/v1/components`, `/v1/tasks`, …) | `403` | `401` |
+
+  On 3.71 an empty repository list is therefore the only sign that anonymous access is off.
+  `nexr status` treats "no credentials and no visible repository" as an authentication failure,
+  and `nexr` gives the same "no credentials are configured" hint for a `403` as for a `401` when no
+  user is configured.
 * User tokens (name code + pass code) are used as Basic credentials.
+* **Authentication rate limit (3.96, not in 3.71).** After more than 3 failed sign-ins of a user
+  name (existing or not), Nexus answers every request with that user name, **even with the right
+  password**, with:
+
+  ```
+  HTTP/1.1 429 Too many authentication attempts
+  Retry-After: 30
+  Content-Type: text/html;charset=utf-8
+  ```
+
+  The HTML body also contains "Too many authentication attempts" (the reason phrase is lost over
+  HTTP/2). Details, read from `AuthRateLimiterServiceImpl` in 3.96.3 and confirmed on a server:
+  * The limit is kept per user name (`user::<name>`) or per user token (`token::<hash>`), in memory;
+    a restart clears it. Requests without credentials are not affected.
+  * The block ends only after **15 minutes without any request for that user name**: the failure
+    counter lives in a cache with `expireAfterAccess(max-delay-seconds)`, and every request,
+    including a blocked one, is an access. Blocked requests are refused before the password is
+    checked, so they do not raise the counter, and `Retry-After` stays at the base delay (30 s). It
+    does not say when the block ends: a client that waits for `Retry-After` and tries again keeps
+    the block alive.
+  * Updating the user or changing its password (`UserUpdatedEvent`, `UserPasswordChanged`) lifts
+    the block at once, e.g. `PUT /v1/security/users/{userId}` with the unchanged user.
+  * Configuration (defaults): `nexus.auth.ratelimit.enabled`, `nexus.auth.ratelimit.max-attempts=3`,
+    `nexus.auth.ratelimit.base-delay-seconds=30`, `nexus.auth.ratelimit.max-delay-seconds=900`,
+    `nexus.auth.ratelimit.max-tracked-keys=10000`.
+  * An infrastructure failure during authentication is answered with
+    `503 Service temporarily unavailable` and `Retry-After: 60`.
+
+  Consequences for `nexr`: a `429` of the rate limit is never retried and is reported as an
+  authentication error (exit code 4) that explains the block; health checks are sent without
+  credentials; and test suites cause failed sign-ins only with throwaway user names.
 * **Community Edition EULA (3.96).** A fresh CE server reports `GET /v1/system/eula` →
   `{"accepted": false, "disclaimer": "…"}`. Automation (e2e bootstrap) accepts it with
   `POST /v1/system/eula` and body `{"accepted": true, "disclaimer": "<the same text>"}` → `204`.
@@ -515,6 +561,9 @@ features, so `nexr` detects them at run time.
 | Content `ETag` = SHA-1 | yes | yes |
 | Community Edition EULA endpoint | no | yes |
 | Anonymous access on a fresh server | enabled | disabled |
+| Request without credentials, anonymous access disabled | `200` with an empty list for repositories and search, `403` elsewhere | `401` |
+| `GET /v1/status/writable` with wrong credentials | `401` | `200` |
+| Authentication rate limit (`429 Too many authentication attempts`) | no | yes |
 
 ## Reproducing the observations
 

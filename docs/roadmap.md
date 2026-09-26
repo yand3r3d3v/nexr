@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft; review decisions of 2026-09-26 applied |
+| **Status** | M0 (foundation) implemented; M1 (raw files) next |
 | **Date** | 2026-09-26 |
 | **Related documents** | [Specification](specification.md) · [Architecture](architecture.md) · [Nexus API notes](nexus-api.md) |
 
@@ -34,6 +34,7 @@
 | Project | `go.mod` (`github.com/yand3r3d3v/nexr`), `Makefile`, `.goreleaser.yaml`, `.golangci.yml`, GitHub Actions (`ci.yml`, `release.yml`), `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` |
 | Core packages | `buildinfo`, `errs`, `output`, `config` (env, file, flags, profiles, credential scoping, secrets, CA bundle and optional client certificates), `httpx` (TLS, proxy, retries, logging), `nexus` core (errors, pagination, server info), `nexustest` skeleton (*latest* dialect), `archtest` |
 | Commands | `nexr version`, `nexr completion`, `nexr repos [ls\|show]`, `nexr status`, `nexr config view\|path\|profiles` |
+| Tests | `scripts/e2e-nexus.sh` (bootstrap of a fresh Nexus container) and a first `test/e2e` suite for `status` and `repos` |
 | Exit criteria | AC-1, AC-2, AC-3 |
 
 ### M1: Raw files → `v0.2.0`
@@ -42,7 +43,7 @@
 |---|---|
 | Packages | `remote` (path parsing and sanitisation), `files` (listing engine: browse, group search, scan, stat; transfer engine; removal), `formats/raw`, `workpool` |
 | Commands | `nexr ls`, `nexr up`, `nexr down`, `nexr rm` |
-| Tests | `scripts/e2e-nexus.sh`, `test/e2e` for raw against the latest release |
+| Tests | `test/e2e` for raw against the latest release; `e2e.yml` workflow (nightly and on demand) |
 | Exit criteria | AC-4, AC-5, AC-6, AC-7 |
 
 ### M2: Docker/OCI images → `v0.3.0`

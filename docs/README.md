@@ -1,8 +1,10 @@
 # nexr design documentation
 
-These documents describe `nexr`, a command-line tool for Sonatype Nexus Repository 3, before
-implementation starts. They are drafts; the decisions from the first review and the remaining open questions
-are listed in [specification.md §11](specification.md#11-assumptions-decisions-and-open-questions).
+These documents describe the design of `nexr`, a command-line tool for Sonatype Nexus Repository 3.
+They were written before the implementation started and are kept up to date with it; the milestone
+in progress is shown in the [roadmap](roadmap.md). The decisions from the first review and the
+remaining open questions are listed in
+[specification.md §11](specification.md#11-assumptions-decisions-and-open-questions).
 
 | Document | What it covers |
 |---|---|
@@ -15,7 +17,7 @@ are listed in [specification.md §11](specification.md#11-assumptions-decisions-
 
 1. Specification §1–§4 for the scope and the general rules.
 2. Specification §6 for the commands.
-3. Architecture §3–§5 for how the code will be organised.
+3. Architecture §3–§5 for how the code is organised.
 4. Nexus API notes when implementing or reviewing a specific integration.
 
 ## Changing these documents

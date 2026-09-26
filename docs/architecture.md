@@ -137,8 +137,8 @@ nexr/
 ├── internal/
 │   ├── cli/                  # presentation layer (one sub-package per command group;
 │   │   │                     #   the "cmd" suffix avoids clashes with domain package names)
-│   │   ├── root.go           #   root command, global flags
-│   │   ├── factory.go        #   lazily constructed dependencies (config, clients, IO)
+│   │   ├── root/             #   root command, global flags, Main (error output, exit code)
+│   │   ├── cmdutil/          #   Factory (lazily built config, clients, IO), argument checks
 │   │   ├── reposcmd/         #   nexr repos
 │   │   ├── filescmd/         #   nexr ls | up | down | rm
 │   │   ├── dockercmd/        #   nexr docker ls | tags | rm
@@ -185,17 +185,19 @@ the newest stable Go.
 
 ### 5.1 Entry point and command framework (`cmd/nexr`, `internal/cli`)
 
-`main` does four things:
+`main` creates a root context cancelled on SIGINT/SIGTERM (`signal.NotifyContext`; a second signal
+exits immediately) and calls `root.Main(ctx, args, factory)`, which:
 
-1. creates a root context cancelled on SIGINT/SIGTERM (`signal.NotifyContext`); a second signal
-   exits immediately with code 130;
-2. builds the command tree with `cli.NewRootCmd(factory)`;
-3. executes it;
-4. maps the returned error to an exit code (`errs.ExitCode`) and prints it (§5.11).
+1. builds the command tree (`root.NewCmd`);
+2. executes it;
+3. prints the returned error as text or JSON (§5.11), with hints that depend on the configuration
+   (for example about credential scoping after a 401);
+4. returns the exit code (`errs.ExitCode`), which `main` passes to `os.Exit`.
 
-Commands follow a pattern proven in large Go CLIs such as `gh`: each command has an `Options` struct,
-a constructor that binds flags, and a `run` function with all the logic. The constructor accepts an
-optional `runF` override so tests can check flag parsing without executing anything.
+Commands follow a pattern proven in large Go CLIs such as `gh`: each command package has a
+constructor that binds the flags to an options struct, and a `run` function with all the logic.
+Commands are tested in-process through `root.Main` with fake streams and the fake Nexus (§8), which
+covers flag parsing, output and exit codes in one go.
 
 ```go
 type LsOptions struct {
@@ -208,20 +210,25 @@ type LsOptions struct {
     Sort      files.SortKey
 }
 
-func NewCmdLs(f *cli.Factory, runF func(context.Context, *LsOptions) error) *cobra.Command
+func NewCmdLs(f *cmdutil.Factory) *cobra.Command
 ```
 
-`cli.Factory` is a small dependency container whose members are built lazily and at most once per
-invocation:
+`cmdutil.Factory` is a small dependency container whose members are built lazily and at most once
+per invocation:
 
 ```go
 type Factory struct {
-    IO       *output.IOStreams
-    Config   func() (*config.Resolved, error)
-    Nexus    func() (*nexus.Client, error)
-    Registry func(repo string) (*registry.Client, error)
-    Now      func() time.Time
+    IO        *output.IOStreams
+    Flags     *GlobalFlags        // bound to the persistent flags of the root command
+    Getenv    func(string) string // os.Getenv; tests pass a map
+    Transport http.RoundTripper   // nil: the network; tests route requests to a fake
 }
+
+func (f *Factory) Config() (*config.Resolved, error) // resolved once; warnings printed once
+func (f *Factory) Nexus() (*nexus.Client, error)
+// Added with the features that need them:
+// func (f *Factory) Registry(repo string) (*registry.Client, error)
+// func (f *Factory) Now() time.Time
 ```
 
 Lazy construction keeps `nexr version` and `nexr completion` fast and lets them work without any
@@ -245,15 +252,19 @@ flowchart LR
     secrets --> validate[validate] --> resolved[(config.Resolved)]
 ```
 
-* Every setting is stored as `Value[T]{V T; Source Source}`. The merge is a pure function over a list
-  of layers, which makes precedence easy to test with tables.
+* Every setting is stored as `Setting[T]{Value T; Origin string; Set bool}`, where `Origin` names
+  the source (`flag --url`, `env NEXUS_URL`, `profile prod`, `file`, `default`). The merge is a pure
+  function over a list of layers, which makes precedence easy to test with tables.
 * The *connection unit* is `url`, `user` and the password. Credentials are accepted from their layer
   only if that layer has the same or higher precedence than the layer that supplied the URL, or if
   both layers name the same normalised URL.
-* Secrets are held in a `Secret` type whose `String()`/`MarshalJSON()` return `"***"`, so they cannot
-  leak through logging or `config view` by accident.
-* Unknown YAML keys are collected with their paths and reported as warnings (FR-CFG-6). Decoding is
-  done in two passes: into typed structs, and into a generic map to detect unknown keys.
+* The password is never stored in `config.Resolved`. It keeps the password *source* (a literal, an
+  environment variable, a file, a command or stdin) and reads it on first use through
+  `Resolved.Password()`. Commands that need no credentials therefore never run a password command,
+  and nothing that prints the resolved configuration can leak the password; `config view` shows
+  `***` and the source.
+* Unknown YAML keys are reported as warnings with their path and line number (FR-CFG-6): the file is
+  decoded into typed structs, and its YAML node tree is compared with the schema.
 
 ### 5.3 HTTP transport (`internal/httpx`)
 
@@ -267,11 +278,11 @@ retry  →  user-agent  →  auth (Basic, pre-emptive)  →  logging  →  http.
 |---|---|
 | TLS | `tls.Config{MinVersion: TLS12}`; system roots plus `--ca-cert` bundle; `InsecureSkipVerify` only with `--insecure` (warning printed by the CLI layer). |
 | Proxy | `http.ProxyFromEnvironment`. |
-| Timeouts | Dial 10 s, TLS handshake 10 s, response headers 60 s; API calls additionally get `--timeout` through the request context; transfers use an idle-read watchdog (5 min without bytes) instead of a total timeout. |
+| Timeouts | Dial 10 s, TLS handshake 10 s, response headers 5 min (a large upload may take a while to be acknowledged); API calls additionally get `--timeout` through the request context; transfers use an idle-read watchdog (5 min without bytes) instead of a total timeout. |
 | HTTP/2 | `ForceAttemptHTTP2: true` (a custom `TLSClientConfig` otherwise disables it). |
-| Retries | Idempotent methods only (`GET`, `HEAD`, `PUT`, `DELETE`); network errors, 429, 502, 503, 504; exponential backoff (500 ms, ×2, ±20% jitter), `Retry-After` honoured, 3 retries by default. Request bodies are replayed through `Request.GetBody`: file uploads provide a `GetBody` that reopens the file; stdin uploads have none and are not retried. |
-| Auth | Pre-emptive `Authorization: Basic …` when credentials are configured. Go's redirect policy already drops `Authorization` on cross-host redirects; a test pins this behaviour. |
-| Logging | `log/slog` at debug level: method, redacted URL, status, duration, attempt number; headers at `-vv` with `Authorization`/`Cookie`/`Set-Cookie` redacted. |
+| Retries | Idempotent methods only (`GET`, `HEAD`, `PUT`, `DELETE`); network errors, 429, 502, 503, 504; exponential backoff (500 ms, ×2, ±20% jitter), `Retry-After` honoured, 3 retries by default. A caller can mark statuses as final for a request (`httpx.WithFinalStatus`): the health check does so for 503, which there means "not available". A `429 Too many authentication attempts` (the authentication rate limit of Nexus 3.96) is never retried, because each further request keeps the user blocked ([nexus-api.md](nexus-api.md#authentication)). Request bodies are replayed through `Request.GetBody`: file uploads provide a `GetBody` that reopens the file; stdin uploads have none and are not retried. |
+| Auth | Pre-emptive `Authorization: Basic …`, added only to requests whose origin (scheme, host and port) is the configured Nexus URL. Redirects and absolute URLs taken from responses (for example registry `Link` headers) therefore never carry the credentials to another server; tests pin this. A request can opt out with `httpx.WithoutAuth` (the health check does, see [nexus-api.md](nexus-api.md#server-identification-and-health)). |
+| Logging | `log/slog` at debug level: method, redacted URL, status, duration, attempt number; headers and truncated JSON bodies at `-vv` with `Authorization`/`Proxy-Authorization`/`Cookie`/`Set-Cookie` redacted. |
 | User agent | `nexr/<version> (<os>/<arch>)`. |
 
 ### 5.4 Nexus client (`internal/nexus`)
@@ -285,6 +296,7 @@ type Client struct { /* base URL, http.Client, capabilities, server info */ }
 // Repositories
 func (c *Client) Repositories(ctx context.Context) ([]Repository, error)
 func (c *Client) Repository(ctx context.Context, name string) (Repository, error)
+func (c *Client) RepositorySettings(ctx context.Context, r Repository) (map[string]any, error) // admin
 
 // Components, assets, search: iterators over continuation-token pages
 func (c *Client) Components(ctx context.Context, repo string) iter.Seq2[Component, error]
@@ -314,7 +326,9 @@ func (c *Client) TaskTemplate(ctx context.Context, taskType string) (TaskTemplat
 func (c *Client) CreateTask(ctx context.Context, t TaskTemplate) (Task, error)            // capability
 
 // Status and raw access
-func (c *Client) Status(ctx context.Context) (Status, error)
+func (c *Client) Health(ctx context.Context) (Health, error)       // readable, writable
+func (c *Client) CheckAuth(ctx context.Context) (AuthState, error) // credentials accepted?
+func (c *Client) Server() ServerInfo                               // from the Server header
 func (c *Client) Raw(ctx context.Context, req *http.Request) (*http.Response, error)
 ```
 
@@ -567,14 +581,15 @@ server has them) → run compaction tasks → report, including blob store sizes
 type Kind int // Generic(1) Usage(2) Config(3) Auth(4) NotFound(5) Partial(6)
               // Network(7) Timeout(8) Rejected(9) Interrupted(130)
 
-type Error struct {
-    Kind  Kind
-    Msg   string
-    Hints []string
-    Err   error // wrapped cause
-}
+type Error struct { /* kind, message, hints, wrapped cause */ }
 
+func New(kind Kind, format string, args ...any) *Error
+func Wrap(kind Kind, err error, format string, args ...any) *Error
+func (e *Error) WithHint(format string, args ...any) *Error
+
+func Classify(err error) Kind // first explicit kind in the chain, then context and network causes
 func ExitCode(err error) int
+func HintsOf(err error) []string
 ```
 
 Classification happens once, in `errs.Classify(err)`. To keep `errs` free of upward dependencies,
@@ -588,15 +603,15 @@ not the other way round.
 | config parse/validation errors | Config |
 | `*nexus.APIError` 401/403 | Auth |
 | `*nexus.APIError` 404, or domain "not found" | NotFound |
-| `*nexus.APIError` 400/405/409/413/422 | Rejected |
+| `*nexus.APIError` 400/405/409/412/413/422 | Rejected |
 | `*nexus.APIError` 5xx | Generic |
 | `net.Error`, `*url.Error` with dial/DNS/TLS/x509 causes | Network |
 | `context.DeadlineExceeded`, task wait timeout | Timeout |
 | `context.Canceled` after SIGINT | Interrupted |
 | bulk results with mixed outcomes | Partial (FR-EXIT-1) |
 
-Domain packages return wrapped, typed errors and never exit or print. Only `main` turns errors into
-text or JSON (FR-OUT-6) and exit codes.
+Domain packages return wrapped, typed errors and never exit or print. Only `root.Main` turns errors
+into text or JSON (FR-OUT-6) and exit codes.
 
 ---
 
@@ -808,7 +823,7 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Version={{.Version}}
-      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Commit={{.Commit}}
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Commit={{.FullCommit}}
       - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Date={{.CommitDate}}
     mod_timestamp: "{{ .CommitTimestamp }}"
 archives:
@@ -816,12 +831,12 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    files: [LICENSE, README.md]
+    files: [LICENSE, README.md, CHANGELOG.md]
 checksum:
   name_template: checksums.txt
 changelog:
   use: github
-homebrew_casks:                     # replaces the deprecated "brews" section since GoReleaser 2.10
+homebrew_casks:                     # from M5; replaces the deprecated "brews" section since GoReleaser 2.10
   - repository:
       owner: yand3r3d3v
       name: homebrew-tap
@@ -840,8 +855,8 @@ hook for this.
 | Workflow | Trigger | Jobs |
 |---|---|---|
 | `ci.yml` | push, pull request | lint; unit tests on ubuntu, macos and windows (Go stable and oldstable); race tests on ubuntu; `goreleaser --snapshot` build of all targets; `govulncheck` |
-| `e2e.yml` | nightly, manual, before release | latest Nexus release; matrix with 3.71 added in M4: bootstrap container, run `test/e2e` |
-| `release.yml` | tag `v*` | GoReleaser: build, archive, checksums, GitHub Release, Homebrew tap update (needs a `HOMEBREW_TAP_GITHUB_TOKEN` secret with write access to the tap repository) |
+| `e2e.yml` (from M1) | nightly, manual, before release | latest Nexus release; matrix with 3.71 added in M4: bootstrap container, run `test/e2e` |
+| `release.yml` | tag `v*` | GoReleaser: build, archive, checksums, GitHub Release; from M5 also the Homebrew tap update (needs a `HOMEBREW_TAP_GITHUB_TOKEN` secret with write access to the tap repository) |
 
 ### 9.4 Versioning
 

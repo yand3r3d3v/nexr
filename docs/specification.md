@@ -993,10 +993,16 @@ prints the response body to stdout. JSON is pretty-printed when stdout is a TTY.
 
 **FR-STATUS-1 (S).** Checks and prints the effective URL, the profile and where it came from, the
 server version and edition (from the `Server` header), read availability (`GET /v1/status`), write
-availability (`GET /v1/status/writable`), and whether the configured credentials are accepted.
+availability (`GET /v1/status/writable`), whether the configured credentials are accepted, and how
+many repositories the user may browse. The health endpoints are called without credentials, so
+that wrong credentials do not hide the health of the server
+([nexus-api.md](nexus-api.md#server-identification-and-health)). The authentication state is one
+of `accepted`, `anonymous`, `rejected`, or `blocked` (the authentication rate limit of Nexus 3.96,
+see [nexus-api.md](nexus-api.md#authentication)).
 
 Exit codes: 0 when the server is reachable and the credentials (if any) are accepted; 7 when the
-server is unreachable; 4 when the credentials are rejected; 1 when the server reports that it is
+server is unreachable; 4 when the credentials are rejected, the user is blocked, or no credentials
+are configured and no repository is visible without them; 1 when the server reports that it is
 unavailable.
 
 ### 6.13 `nexr config`
@@ -1099,7 +1105,11 @@ server's message (from the JSON body, the plain-text body or the reason phrase) 
 the Nexus fault ID (`siesta-faultid`), which lets administrators find the entry in the server log.
 
 **FR-ERR-3 (M).** 401 errors hint at credentials, profiles and the credential scoping rule. 403 errors
-name the privilege that is typically required (§9). TLS errors hint at `--ca-cert` and `--insecure`.
+name the privilege that is typically required (§9); when no credentials are configured, they hint
+at configuring them instead (Nexus 3.71 answers 403 rather than 401 when anonymous access is
+disabled). A `429 Too many authentication attempts` explains the authentication rate limit: how
+the block ends and that an administrator can lift it. TLS errors hint at `--ca-cert` and
+`--insecure`.
 
 ### 7.4 Exit codes
 
@@ -1159,7 +1169,8 @@ code is used. If the failures have different categories, or some items succeeded
 * **NFR-REL-1 (M), retries.** Idempotent requests (`GET`, `HEAD`, `PUT`, `DELETE`) are retried on
   connection errors and on HTTP 429, 502, 503 and 504, with exponential backoff and jitter. The
   default is 3 retries, starting at 500 ms, and `Retry-After` is honoured. `POST` requests are never
-  retried automatically.
+  retried automatically. A `429 Too many authentication attempts` from the authentication rate limit
+  of Nexus 3.96 is never retried, because every further request keeps the user blocked.
 * **NFR-REL-2 (M), timeouts.** Connect: 10 s. TLS handshake: 10 s. API requests: `--timeout` (60 s).
   File transfers have no total timeout, but fail when no data flows for 5 minutes.
 * **NFR-REL-3 (M), cancellation.** On SIGINT, in-flight operations stop within 2 s, temporary files are
