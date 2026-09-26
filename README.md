@@ -9,7 +9,9 @@ files, container images and storage cleanup without the web UI.
 
 ## Planned for v1.0
 
-* One static binary for Linux, macOS and Windows (amd64/arm64), with nothing to install at run time.
+* One static binary for Linux, macOS and Windows (amd64/arm64), with nothing to install at run time;
+  also installable with Homebrew.
+* Works with Nexus Repository 3.71 and newer; the latest release is supported first.
 * One configuration for everything: environment variables (`NEXUS_URL`, `NEXUS_USER`,
   `NEXUS_PASSWORD`), an optional YAML file with profiles for several Nexus instances, and flags.
 * **Files (raw):** `nx ls`, `nx up`, `nx down`, `nx rm`, with recursive transfers, parallelism,

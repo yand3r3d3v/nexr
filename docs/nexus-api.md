@@ -4,15 +4,20 @@
 |---|---|
 | **Status** | Reference for implementers |
 | **Date** | 2026-09-26 |
-| **Verified against** | Nexus Repository **3.96.3-01 Community Edition** (H2) and **3.70.1-02 OSS** (OrientDB), fresh `sonatype/nexus3` containers |
+| **Verified against** | Nexus Repository **3.96.3-01 CE** (latest release) and **3.71.0-06 OSS** (oldest supported release), both on H2, in fresh `sonatype/nexus3` containers |
 | **Related documents** | [Specification](specification.md) · [Architecture](architecture.md) |
 
 This page records how the Nexus APIs used by `nx` actually behave. It comes from experiments with
-real servers, not only from the documentation. Statements are verified on both versions unless
-marked **(3.96)** or **(3.70)**. Unverified statements are marked *(not verified)*.
+real servers, not only from the documentation. Unless stated otherwise, the observations were made on
+**3.96.3**. Differences in **3.71.0** are marked **(3.71)**, and features that exist only in newer
+releases are marked **(3.96)**. Statements taken from documentation alone are marked
+*(not verified)*.
+
+Releases up to 3.70 (OrientDB) are not supported by `nx`. A few of their differences are noted
+because older articles and scripts rely on them.
 
 The full OpenAPI definition of a running server is available at `<base>/service/rest/swagger.json`.
-It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.70.
+It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.71.
 
 ---
 
@@ -44,14 +49,14 @@ It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.70.
 | REST API | `<base>/service/rest/v1/…` (a few endpoints under `/beta/` and `/internal/`) | repositories, components, assets, search, browse, tasks, status |
 | Repository content | `<base>/repository/<repo>/<path>` | download, upload (`PUT`), delete for raw and other path-based formats |
 | Docker Registry v2 | `<base>/repository/<repo>/v2/…` | image catalog, tags, manifests |
-| Docker connectors | `http(s)://<host>:<port>/v2/…`, sub-domain, or `<base>/v2/<repo>/…` with `pathEnabled` **(3.96)** | Docker clients; `nx` does not need them |
+| Docker connectors | `http(s)://<host>:<port>/v2/…`, sub-domain, or `<base>/v2/<repo>/…` with `pathEnabled` **(3.96)** | Docker clients; `nx` does not need them, but can use one (spec FR-NET-3) |
 
 `<base>` may include a context path (e.g. `https://example.com/nexus`).
 
 ## Server identification and health
 
-* Every response carries a `Server` header: `Nexus/3.96.3-01 (COMMUNITY)` and `Nexus/3.70.1-02 (OSS)`.
-  Pro servers report their edition in the same place *(not verified)*.
+* Every response carries a `Server` header, e.g. `Nexus/3.96.3-01 (COMMUNITY)` or
+  `Nexus/3.71.0-06 (OSS)`. Pro servers report their edition in the same place *(not verified)*.
 * `GET /v1/status` → `200` when the server can serve reads, `503` otherwise. **Anonymous access is
   allowed**, even when anonymous access to repositories is disabled.
 * `GET /v1/status/writable` → `200`/`503` for writes. Also anonymous.
@@ -67,12 +72,14 @@ It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.70.
   WWW-Authenticate: BASIC realm="Sonatype Nexus Repository Manager"
   ```
 
-* Anonymous access is **disabled** on fresh installations (`GET /v1/security/anonymous` →
-  `{"enabled": false, …}`).
+* Anonymous access (`GET /v1/security/anonymous`) was **disabled** on a fresh 3.96 server and
+  **enabled** on a fresh 3.71 server. Test setups must set it explicitly
+  (`PUT /v1/security/anonymous`).
 * User tokens (name code + pass code) are used as Basic credentials.
 * **Community Edition EULA (3.96).** A fresh CE server reports `GET /v1/system/eula` →
   `{"accepted": false, "disclaimer": "…"}`. Automation (e2e bootstrap) accepts it with
   `POST /v1/system/eula` and body `{"accepted": true, "disclaimer": "<the same text>"}` → `204`.
+  The endpoint does not exist on 3.71 (`404`).
 * **Docker repositories** (Registry API, also under `/repository/<repo>/v2/`):
   * `forceBasicAuth: true` (the common setting): a `401` challenge is `BASIC realm=…`.
   * `forceBasicAuth: false` with the *Docker Bearer Token Realm* active: the challenge is
@@ -115,7 +122,7 @@ Nexus uses three body shapes. The HTTP **reason phrase** often carries the usefu
 
 Status codes seen or documented: `204` for successful deletes and runs, `201` for created content
 and tasks, `400` for validation and wildcard errors, `401`, `403`, `404`, `405` (task disabled; task
-creation on 3.70), `409` (redeploy disabled; stopping an idle task), `422` (malformed ID, missing
+creation on 3.71), `409` (redeploy disabled; stopping an idle task), `422` (malformed ID, missing
 `repository` parameter), `500` (running a task that is already running).
 
 ## Pagination
@@ -124,17 +131,17 @@ creation on 3.70), `409` (redeploy disabled; stopping an idle task), `422` (malf
 back as `continuationToken=<token>`. The token is opaque: it looks like a hex hash for
 components/assets and like an offset (`"50"`) for search. Never parse it.
 
-| Endpoint | 3.70.1 page size | 3.96.3 page size |
+| Endpoint | 3.71.0 page size | 3.96.3 page size |
 |---|---|---|
 | `GET /v1/components` | 10 | 100 |
 | `GET /v1/assets` | 10 | 100 |
 | `GET /v1/search`, `GET /v1/search/assets` | 50 | 50 |
-| `GET /v1/tasks` | all in one page | all in one page |
+| `GET /v1/tasks` | single page observed | single page observed |
 | `GET /v1/repositories` | not paginated (array) | not paginated (array) |
 | `GET /v1/repositories/{repo}/browse` **(3.96)** | n/a | not paginated (150 entries returned in one response) |
 
 The page size is not configurable. A full scan of a repository with 100,000 assets needs 10,000
-requests on 3.70 and 1,000 on 3.96.
+requests on 3.71 and 1,000 on 3.96.
 
 ## Repositories
 
@@ -155,12 +162,12 @@ requests on 3.70 and 1,000 on 3.96.
   }
   ```
 
-* `pathEnabled: true` **(3.96)** cannot be combined with `httpPort`, `httpsPort` or `subdomain`
-  (`400`).
+* `pathEnabled` **(3.96)** cannot be combined with `httpPort`, `httpsPort` or `subdomain` (`400`).
 * Repository names match `^[a-zA-Z0-9\-]{1}[a-zA-Z0-9_\-\.]*$`. `oci` repository names must be
   lower-case.
-* Formats on 3.96 include `oci` (separate from `docker`), `cargo`, `huggingface`, `swift`,
-  `terraform` and others. `bower` was removed after 3.70.
+* The formats available through the API differ by release and edition. 3.96 CE offers `oci`
+  (separate from `docker`), `helm`, `go`, `conda`, `cargo`, `huggingface`, `swift`, `terraform` and
+  others. The 3.71 OSS API has no create endpoints for most of these.
 
 ## Components and assets
 
@@ -168,14 +175,15 @@ requests on 3.70 and 1,000 on 3.96.
 
 Component: `{id, repository, format, group, name, version, assets[]}`.
 
-Asset fields by version:
+Asset fields:
 
-| Field | 3.70 | 3.96 |
+| Field | 3.71 | 3.96 |
 |---|---|---|
 | `id`, `path`, `downloadUrl`, `repository`, `format`, `contentType` | yes | yes |
 | `checksum` (`sha1`, `sha256`, `sha512`, `md5`) | yes | yes |
-| `lastModified`, `blobCreated`, `lastDownloaded`, `uploader`, `uploaderIp`, `fileSize` | yes | yes |
-| `blobStoreName`, `blobUpdated`, `blobRef`, `lastVerified`, `registryUrl` | no | yes |
+| `lastModified`, `lastDownloaded`, `uploader`, `uploaderIp`, `fileSize` | yes | yes |
+| `blobCreated`, `blobStoreName` | present, but `null` in our tests | set |
+| `blobUpdated`, `blobRef`, `lastVerified`, `registryUrl` | no | yes |
 | format attributes (`raw: {}`, `docker: {…}`) | no | yes |
 
 IDs are opaque strings. They look like base64url of `<repo>:<internal-id>`, but that is not a
@@ -183,27 +191,31 @@ contract. A raw component and its asset may have the same or different IDs.
 
 ### Raw
 
-| | 3.70 (OrientDB) | 3.96 (H2) |
-|---|---|---|
-| component `group` | `/dir/sub` (`/` for files at the root) | `/dir/sub` (`/` for the root) |
-| component `name` | `dir/sub/c.txt` | `/dir/sub/c.txt` |
-| component `version` | `null` | `""` |
-| asset `path` | `dir/sub/c.txt` | `/dir/sub/c.txt` |
+| | 3.71 and 3.96 |
+|---|---|
+| component `group` | `/dir/sub` (`/` for files at the root) |
+| component `name` | `/dir/sub/c.txt` |
+| component `version` | `""` |
+| asset `path` | `/dir/sub/c.txt` |
+
+OrientDB releases (≤ 3.70) stored `name` and `path` without the leading slash and `version` as
+`null`.
 
 * One component per file, one asset per component.
-* Deleting the asset also deletes the component, so no orphan remains **(3.96)**.
+* Deleting the asset also deletes the component, so no orphan remains.
 * A path can be both a file and a directory at the same time (e.g. `dir/sub` and `dir/sub/c.txt`).
 
 ### Docker / OCI
 
 * One component per **tag**: `name` = image name (`team/app`), `version` = tag, `group` = `""`.
-* The component's only asset is the tag's manifest: `path` = `/v2/team/app/manifests/1.1` (3.96) or
-  `v2/team/app/manifests/1.1` (3.70). `checksum.sha256` equals the manifest digest
-  (`Docker-Content-Digest`). `contentType` is the manifest media type (OCI/Docker manifest or index).
+* The component's only asset is the tag's manifest: `path` = `/v2/team/app/manifests/1.1`.
+  `checksum.sha256` equals the manifest digest (`Docker-Content-Digest`). `contentType` is the
+  manifest media type (OCI/Docker manifest or index). `lastModified` is the push time; it is set on
+  3.71 and 3.96.
 * Manifests addressed by digest (the per-platform children of a multi-arch index, attestation
   manifests, and manifests that a client pushes by digest) are stored as assets
-  `…/manifests/sha256:<digest>` **without their own component**.
-  Layers and configs are component-less blobs (`/v2/-/blobs/sha256:…` on 3.96).
+  `…/manifests/sha256:<digest>` **without their own component**. Layers and configs are
+  component-less blobs (`/v2/-/blobs/sha256:…` on 3.96).
 * **(3.96)** The manifest asset carries `docker` attributes:
 
   ```json
@@ -218,8 +230,9 @@ contract. A raw component and its asset may have the same or different IDs.
 
   `totalSize` is a human-readable string. For an index it describes one platform.
 * The `oci` format **(3.96)** uses the same model (`format: "oci"`).
-* **Deleting a tag component removes only that tag.** Other tags pointing to the same digest remain
-  pullable, and the manifest by digest stays until the Docker GC task removes unreferenced data.
+* **Deleting a tag component removes only that tag** (verified on 3.71 and 3.96). Other tags pointing
+  to the same digest remain pullable, and the manifest by digest stays until the Docker GC task removes
+  unreferenced data.
 
 ## Search
 
@@ -231,36 +244,36 @@ versions of a component across all repositories. It cannot filter by repository.
 
 ### Matching rules
 
-| Behaviour | 3.70 (Elasticsearch) | 3.96 (SQL) |
+| Behaviour | 3.71 | 3.96 |
 |---|---|---|
 | `name=X`, `group=X` without wildcard | exact match | exact match |
-| Trailing wildcard `X*` | any length | needs ≥ 3 characters before `*`, otherwise `400` |
-| Leading wildcard | not used | rejected |
-| Quoted value `"X"` | exact phrase | exact phrase; a wildcard outside the quotes does **not** make it a prefix (`"/dir/sub"*` matched only `/dir/sub`) |
-| Unquoted value with spaces | not tested | split into terms; `group=/space dir*` and `group=/space dir/sub dir` returned **nothing** (false negatives) |
+| Trailing wildcard `X*` | any length (`name=/b*` accepted) | needs ≥ 3 characters before `*`, otherwise `400` |
+| Leading wildcard | not tested | rejected |
+| Quoted value `"X"` | exact phrase (tested with `group`) | exact phrase; a wildcard outside the quotes does **not** make it a prefix (`"/dir/sub"*` matched only `/dir/sub`) |
+| Unquoted value with spaces | `group=/space dir*` returned **nothing** | split into terms; `group=/space dir*` and `group=/space dir/sub dir` returned **nothing** (false negatives) |
 | Values with `-`, `,`, non-ASCII | fine for `group` | fine for `group` |
 
-Observed raw queries on 3.96 (files under `dir/`, `dir-sibling/`, `other/dir/`):
+Observed raw queries (files under `dir/`, `dir-sibling/`, `other/dir/`):
 
 | Query | Result |
 |---|---|
-| `name=dir/sub/c.txt` | none (3.96 names start with `/`); on 3.70 → the file |
-| `name=/dir/sub/c.txt` | the file (3.96); none on 3.70 |
+| `name=dir/sub/c.txt` | none: raw names start with `/` |
+| `name=/dir/sub/c.txt` | the file |
 | `name=/dir/sub*` | `/dir/sub`, `/dir/sub/c.txt`, `/dir/sub/deeper/d.bin` |
-| `group=/dir/sub` | files directly in `/dir/sub` (both versions) |
-| `group=/dir/sub*` | every file below `/dir/sub`, but also `/dir/subway/…` if it existed (both versions) |
+| `group=/dir/sub` | files directly in `/dir/sub` |
+| `group=/dir/sub*` | every file below `/dir/sub`, but also `/dir/subway/…` if it existed |
 | `group=/dir*` | also matches `/dir-sibling/e.txt`, so the client must filter |
-| `raw.name=c.txt` | files with that base name |
+| `raw.name=c.txt` **(3.96)** | files with that base name |
 | `q=sub` | keyword search over tokens; also matches `/other/dir/sub-x.txt` |
 
-**Conclusion for `nx`:** `group` is stable across versions. Use a quoted exact `group` for one
-directory, an unquoted `group=<dir>*` for recursive listing (only when the value is ≥ 3 characters
-and contains no whitespace or quotes), and always filter results by exact path prefix on the client.
+**Conclusion for `nx`:** use the `group` parameter. Use a quoted exact `group` for one directory, and
+an unquoted `group=<dir>*` for recursive listing, but only when the value has at least 3 characters
+and contains no whitespace or quotes. Always filter results by exact path prefix on the client.
 
 ### Consistency
 
 Search results are **eventually consistent** for inserts: a file uploaded with `PUT` appeared in
-search and browse results after about **2 seconds** (3.96), while `GET /v1/components` showed it
+search and browse results after about **2 seconds**, while `GET /v1/components` showed it
 immediately. Deletions disappeared from search immediately.
 
 ### Sorting
@@ -271,7 +284,7 @@ useful for SemVer, so `nx` sorts on the client.
 
 ## Browse API
 
-**(3.96 only; absent on 3.70.)**
+**(3.96 only; `404` on 3.71.)**
 
 * `GET /v1/repositories/{repo}/browse?path=<dir>` lists one level. `path` accepts `/`, `/dir` or
   `dir`. A non-existent path returns `[]`. An unknown repository returns a siesta `404`. The response
@@ -306,15 +319,15 @@ useful for SemVer, so `nx` sorts on the client.
 | `HEAD` file | `200` with the same headers and no body |
 | `GET`/`HEAD` directory (`dir`, `dir/`) | `404` |
 | `PUT` new file (raw) | `201` |
-| `PUT` existing file, redeploy allowed | `201` (overwrites) |
+| `PUT` existing file, redeploy allowed | `201` (overwrites; also on 3.71) |
 | `PUT` existing file, `ALLOW_ONCE` | `409 <repo>/<path> -  cannot be updated as asset already exists and redeploy is not allowed` |
 | `PUT` with strict content validation mismatch | `400 Detected content type [text/plain], but expected [image/png]: /fake.png` |
 | `PUT` to unknown repository | `404 Repository not found` |
 | `PUT` of an invalid path to a Maven repository | `400 Invalid mavenPath for a Maven 2 repository` |
-| `DELETE` file (raw) | `204`; again → `404` |
+| `DELETE` file (raw) | `204`; again → `404` (also on 3.71) |
 
-**The `ETag` is the SHA-1 of the content** (verified with `sha1sum`), which allows integrity checks
-without an extra API call.
+**The `ETag` is the SHA-1 of the content** (verified with `sha1sum` on 3.71 and 3.96), which allows
+integrity checks without an extra API call.
 
 ## Component upload (multipart)
 
@@ -341,7 +354,8 @@ without an extra API call.
 ## Docker Registry v2 API
 
 Reached through `<base>/repository/<repo>/v2/` for every Docker/OCI repository. This works for
-repositories with port connectors, for `pathEnabled` repositories, and for `oci` repositories.
+repositories with port connectors, for `pathEnabled` repositories and for `oci` repositories, on 3.71
+and 3.96.
 
 | Request | Result |
 |---|---|
@@ -353,15 +367,29 @@ repositories with port connectors, for `pathEnabled` repositories, and for `oci`
 | `DELETE …/v2/<name>/manifests/<digest>` | `202`; removes **every tag** that points to the digest |
 | `DELETE …/v2/<name>/manifests/<tag>` | `202`; removes only that tag (Nexus-specific, not in the Registry spec) |
 
-`nx` deletes tags through `DELETE /v1/components/{id}` instead (precise, documented REST API).
+**Pagination `Link` header (3.71).** On the path-based endpoint, 3.71 returns a `Link` URL without the
+repository prefix:
+
+```
+GET /repository/docker-hosted/v2/_catalog?n=1
+Link: <http://localhost:8081/v2/_catalog?n=1&last=multi%2Falpine>; rel="next"
+```
+
+Following it literally gives `404`. Re-issuing `?n=1&last=multi%2Falpine` against
+`/repository/docker-hosted/v2/_catalog` returns the next page. 3.96 returns a correct URL. Behind a
+reverse proxy, the host in the `Link` URL may also differ from the one the client used. Clients should
+therefore read `n` and `last` from the header and build the next request themselves.
+
+`nx` deletes tags through `DELETE /v1/components/{id}` instead of the Registry API (precise,
+documented REST API).
 
 With `pathEnabled: true` **(3.96)**, Docker clients use `<host>/<repo>/<image>:<tag>` and the
-Registry API is also served at `<base>/v2/<repo>/<image>/…`. `<base>/v2/_catalog` is not
-available on that route.
+Registry API is also served at `<base>/v2/<repo>/<image>/…`. `<base>/v2/_catalog` is not available
+on that route.
 
 ## Tasks
 
-| Endpoint | 3.70 | 3.96 | Notes |
+| Endpoint | 3.71 | 3.96 | Notes |
 |---|---|---|---|
 | `GET /v1/tasks?type=<type>` | yes | yes | `{"items": [...], "continuationToken": null}` |
 | `GET /v1/tasks/{id}` | yes | yes | `404` if unknown |
@@ -371,11 +399,11 @@ available on that route.
 | `PUT /v1/tasks/{id}`, `DELETE /v1/tasks/{id}` | no | yes | update and delete |
 | `GET /v1/tasks/templates`, `GET /v1/tasks/templates/{type}` | no | yes | form fields and defaults |
 
-Task fields: 3.70 has `id, name, type, message, currentState, lastRunResult, nextRun, lastRun`.
+Task fields: 3.71 has `id, name, type, message, currentState, lastRunResult, nextRun, lastRun`.
 3.96 adds `typeName, schedule, properties, enabled, alertEmail, notificationCondition, startDate,
 recurringDays, cronExpression, timeZoneOffset`.
 
-Observed run of a manual task (3.96):
+Observed run of a manual task (identical on 3.71 and 3.96):
 
 ```
 before:  currentState=WAITING  lastRunResult=null  lastRun=null
@@ -412,7 +440,7 @@ POST /v1/tasks
 → 201 {"id": "f3a1c37a-…", "currentState": "WAITING", "properties": {…}, …}
 ```
 
-Fresh 3.70 and 3.96 servers have **no** Docker GC or compaction task, so an administrator (or
+Fresh 3.71 and 3.96 servers have **no** Docker GC or compaction task, so an administrator (or
 `nx gc --create-missing` on 3.96) has to create them.
 
 ### Storage reclamation
@@ -422,14 +450,15 @@ Fresh 3.70 and 3.96 servers have **no** Docker GC or compaction task, so an admi
   store* shrank the blob store from 355 blobs / 68.8 MB to 230 blobs / 34.5 MB in our test (3.96).
   The metrics in `GET /v1/blobstores` (`blobCount`, `totalSizeInBytes`) were updated a few seconds
   after the tasks finished.
-* **(3.96)** Nexus automatically creates one system task *Admin - Cleanup unused asset blobs*
-  (`assetBlob.cleanup`, properties `{"contentStore": "nexus", "format": "<format>"}`) per format in
-  use, scheduled every 30 minutes. This task is not among the templates, so it cannot be created
-  through the API. Judging by its name, it releases the blobs of deleted assets. In our test, the blob
-  of a deleted raw file was still on disk (not marked deleted) after a manual run of this task
-  followed by compaction, both for a blob created one minute and 31 minutes before the deletion. The
-  server applies a delay we could not determine, so space released by raw deletions is reclaimed
-  asynchronously. This is to be verified further during milestone M3.
+* Nexus automatically creates one system task *Admin - Cleanup unused asset blobs*
+  (`assetBlob.cleanup`) per format in use, on 3.71 and 3.96. On 3.96 its properties are
+  `{"contentStore": "nexus", "format": "<format>"}`, and it is scheduled every 30 minutes. This task is
+  not among the templates, so it cannot be created through the API. Judging by its name, it releases
+  the blobs of deleted assets. In our test (3.96), the blob of a deleted raw file was still on disk
+  (not marked deleted) after a manual run of this task followed by compaction, both for a blob created
+  one minute and 31 minutes before the deletion. The server applies a delay we could not determine,
+  so space released by raw deletions is reclaimed asynchronously. This is to be verified further
+  during milestone M3.
 * Compaction logs `Begin deleted blobs processing for blob store '<name>' before <timestamp>` and
   prunes empty directories. It only removes blobs that were already soft-deleted.
 
@@ -462,29 +491,35 @@ Deletion:
 
 ## Version differences
 
-| Area | 3.70.1 (OrientDB) | 3.96.3 (H2) |
+Between the oldest supported and the latest release. Releases in between may have any mix of these
+features, so `nx` detects them at run time.
+
+| Area | 3.71.0 | 3.96.3 |
 |---|---|---|
 | OpenAPI document | Swagger 2.0 | OpenAPI 3.0.1 |
 | Component/asset page size | 10 | 100 |
-| Raw `name`/`path` | no leading `/` | leading `/` |
-| Component `version` for raw | `null` | `""` |
-| Search wildcard | any length | ≥ 3 characters before `*` |
-| Browse API | no | yes |
+| Raw `name`/`path` | leading `/` | leading `/` |
+| Search trailing wildcard | any length | ≥ 3 characters before `*` |
+| Browse API | no (`404`) | yes |
 | Task create/update/delete/templates | no (`405`) | yes |
 | Task `properties` in responses | no | yes |
-| Asset `docker` attributes, `blobStoreName`, `registryUrl` | no | yes |
+| `assetBlob.cleanup` system tasks | yes | yes |
+| Asset `blobCreated`, `blobStoreName` | `null` | set |
+| Asset `docker` attributes, `registryUrl` | no | yes |
 | Repository `online`, `size` fields | no | yes |
 | `raw.name`, `oci.*`, `docker.os/architecture` search parameters | no | yes |
 | `/v1/search/versions`, `/v1/search/suggest` | no | yes |
-| Docker `pathEnabled` routing | no | yes |
+| `oci` format, Docker `pathEnabled` routing | no | yes |
+| Registry `Link` header on `/repository/<repo>/v2/` | missing the repository prefix | correct |
 | Registry API under `/repository/<repo>/v2/` | yes | yes |
 | Content `ETag` = SHA-1 | yes | yes |
 | Community Edition EULA endpoint | no | yes |
+| Anonymous access on a fresh server | enabled | disabled |
 
 ## Reproducing the observations
 
 ```sh
-# Nexus 3.96.3 (H2) with a Docker connector on 8082
+# Nexus with a Docker connector on 8082 (use 3.71.0 for the oldest supported release)
 docker run -d --name nexus --network host sonatype/nexus3:3.96.3
 until curl -fs http://localhost:8081/service/rest/v1/status; do sleep 5; done
 PASS=$(docker exec nexus cat /nexus-data/admin.password)

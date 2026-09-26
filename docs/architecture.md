@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review |
-| **Version** | 0.1 |
+| **Status** | Draft; review decisions of 2026-09-26 applied |
+| **Version** | 0.2 |
 | **Date** | 2026-09-26 |
 | **Related documents** | [Specification](specification.md) · [Nexus API notes](nexus-api.md) · [Roadmap](roadmap.md) |
 
@@ -35,7 +35,7 @@ the main runtime flows, and the decisions behind them. Requirements are defined 
 |---|---|
 | **One static binary, no runtime dependencies** (NFR-PLAT-2) | Pure Go, `CGO_ENABLED=0`, minimal third-party code (cobra and a YAML parser only). |
 | **Grows into a full Nexus CLI** (more formats, admin resources) | Command groups map to domain packages; format-specific behaviour sits behind *format adapters*; the REST client is organised by API resource. |
-| **Works across Nexus versions** (§3.3 of the spec) | Runtime capability detection and fallback strategies instead of version checks; tests run against two API "dialects". |
+| **Works across Nexus releases 3.71+, latest first** (spec §3.2–§3.3) | Runtime capability detection and fallback strategies instead of version checks; tests run against two API "dialects" (latest and 3.71). |
 | **Safe for destructive operations** | Every deletion is split into a *plan* (pure, testable, printable in `--dry-run`) and an *execution* step. |
 | **Scriptable** | Strict separation of stdout and stderr, a stable JSON contract, typed errors mapped to exit codes. |
 | **Testable without a real server** | Consumer-defined interfaces, an in-memory fake Nexus, golden-file tests for command output; end-to-end tests against real Nexus containers. |
@@ -364,16 +364,21 @@ func (c *Client) Tags(ctx context.Context, image string) iter.Seq2[string, error
 func (c *Client) Head(ctx context.Context, image, ref string) (Descriptor, error) // digest, media type, size
 ```
 
-* Pagination uses `?n=<page>` and follows the RFC 5988 `Link: <…>; rel="next"` header. Nexus
-  supports both on `_catalog` and `tags/list` (verified).
+* Pagination uses `?n=<page>&last=<cursor>`. The RFC 5988 `Link: <…>; rel="next"` header tells the
+  client whether there is a next page, but its URL is **not** followed. On 3.71 it points to `/v2/…`
+  without the `/repository/<repo>` prefix, and behind a reverse proxy its host may differ. The client
+  reads `n` and `last` from it and builds the next request against its own base URL.
 * `Head` sends an `Accept` list covering OCI index/manifest and Docker manifest list/v2 media types,
   and reads `Docker-Content-Digest`.
 * Authentication: Basic credentials are sent pre-emptively when configured. On a
   `401` with a `WWW-Authenticate: Bearer realm=…,service=…,scope=…` challenge (anonymous or
   token-realm setups), the client obtains a token from the realm, with Basic credentials if
   available, caches it per scope, and retries once.
-* The base URL defaults to `<url>/repository/REPO/`. A configured registry URL override (spec §3.4,
-  Q2) replaces it.
+* The base URL is resolved per repository from `--registry-url`, `NX_DOCKER_REGISTRY_URL` and
+  `docker.registry_urls[REPO]` with the usual precedence rules, falling back to the default
+  `<url>/repository/REPO/` (spec FR-NET-3). The same
+  map, inverted (registry host → repository), resolves image references that start with a registry
+  host (FR-IMGREF-3).
 
 ### 5.6 Files domain (`internal/files`)
 
@@ -393,8 +398,8 @@ therefore chooses among four strategies:
 | **Stat** | `HEAD /repository/R/PATH` | existence, size, `ETag` (SHA-1), `Last-Modified` | Single files only; a directory answers 404 |
 
 The `group` search parameter is the key: raw components store their directory in `group`
-(`/dir/sub`) the same way in every tested version, while `name`/`path` differ by version. Values with
-spaces break unquoted wildcard searches (verified), so they use a different strategy.
+(`/dir/sub`), so one query selects a directory or a whole subtree. Values with spaces break unquoted
+wildcard searches (verified on 3.71 and 3.96), so they use a different strategy.
 
 Selection rules:
 
@@ -404,6 +409,10 @@ Selection rules:
 | recursive below `dir` (`ls -r`, `down`, `rm -r`) | Group search `group=/dir*` with client-side prefix filter | Browse traversal plus exact group search per folder (whitespace in names); then Scan |
 | recursive below the root or a short directory | Browse traversal (newer servers), plus exact group search per folder when metadata is needed | Scan |
 | single file resolution | Stat | exact group search (to obtain an asset ID) |
+
+Implementation order follows the version priority. M1 implements what the latest release needs
+(Browse, Group search, Scan, Stat). M4 adds and tests the selection paths used when the Browse API is
+missing (3.71 and other releases without it).
 
 Every strategy produces the same stream of `files.Entry` values. Results are always filtered on the
 client by exact path prefix, because search-based strategies may return false positives
@@ -711,16 +720,16 @@ sequenceDiagram
 * TLS 1.2 is the minimum version. `--insecure` is loud.
 * No implicit configuration from the working directory, and no telemetry.
 * Supply chain: few dependencies, `govulncheck` in CI, checksums with every release, and signing
-  planned (spec NFR-BUILD-4).
+  planned (spec NFR-BUILD-5).
 
 ### 7.3 Compatibility strategy
 
 | Mechanism | Examples |
 |---|---|
-| Normalise at the edge | leading-slash raw paths, `null` vs `""` versions, optional attributes |
-| Detect on first use, then cache | Browse API, task CRUD, task properties |
-| Degrade gracefully | Browse → group search → scan; search `400` → next strategy; missing Docker attributes → empty columns |
-| Test both dialects | `nexustest` fake with a *legacy* (3.70-like) and a *modern* (3.96-like) mode; e2e against real containers of both |
+| Normalise at the edge | leading slash of raw paths, optional attributes (`blobCreated`, Docker attributes) |
+| Detect on first use, then cache | Browse API, task creation API, task properties |
+| Degrade gracefully | Browse → group search → scan; search `400` → next strategy; missing Docker attributes → empty columns; registry `Link` header → next page rebuilt from `n`/`last` |
+| Test both dialects | `nexustest` fake with a *latest* (3.96-like) mode from M0 and a *baseline* (3.71-like) mode from M4; e2e against real containers of both |
 
 ### 7.4 Performance
 
@@ -744,24 +753,25 @@ sequenceDiagram
 | Level | Scope | Tools |
 |---|---|---|
 | **Unit** | pure logic: config merge and scoping, path and reference parsing, pattern matching, retention planner, plan builders, humanisation, error classification | `testing`, table-driven tests |
-| **Client** | `nexus`, `registry`, `httpx`: request construction, pagination, error decoding, retries, auth challenges, redirects | `net/http/httptest`, JSON fixtures captured from real Nexus 3.96.3 and 3.70.1 (`testdata/`) |
-| **Domain** | `files`, `images`, `tasks` against the in-memory fake | `nexustest` in *legacy* and *modern* dialects |
+| **Client** | `nexus`, `registry`, `httpx`: request construction, pagination, error decoding, retries, auth challenges, redirects | `net/http/httptest`, JSON fixtures captured from real Nexus 3.96.3 (and 3.71.0 from M4) (`testdata/`) |
+| **Domain** | `files`, `images`, `tasks` against the in-memory fake | `nexustest` in the *latest* dialect, plus the *baseline* dialect from M4 |
 | **Command** | whole commands in-process: flags → output → exit code | fake `IOStreams`, `nexustest`, golden files (`go test ./... -update` refreshes them) |
 | **End-to-end** | the built binary against real Nexus containers | build tag `e2e`, `scripts/e2e-nexus.sh`, Docker, `crane` for image fixtures |
 
 **The in-memory fake (`internal/nexus/nexustest`)** implements the endpoints `nx` uses: repositories,
 components, assets, search (group/name/version with the wildcard rules), browse, content
 GET/HEAD/PUT/DELETE, registry catalog/tags, and tasks with a simulated state machine. The two
-dialects reproduce the differences listed in spec §3.3: page sizes, leading slashes, wildcard rule,
-Browse API and task CRUD availability, and index lag. Fault injection (5xx, delays, resets) tests
-retries and partial failures.
+dialects reproduce the differences listed in spec §3.3: page sizes, the wildcard rule, Browse API and
+task API availability, task properties, Docker attributes, the registry `Link` header, and index lag.
+Fault injection (5xx, delays, resets) tests retries and partial failures.
 
 **End-to-end environment.** `scripts/e2e-nexus.sh <version>` starts `sonatype/nexus3:<version>`,
 waits for `/service/rest/v1/status`, reads the generated admin password, sets a known one, accepts the
-Community Edition EULA where required, creates raw, docker and oci hosted repositories, enables the
-Docker Bearer Token realm, and pushes image fixtures (single-arch and multi-arch) with `crane`. The
-suite runs nightly, on demand, and before every release, against the latest Nexus release and the
-oldest supported release.
+Community Edition EULA where required, sets anonymous access explicitly (a fresh 3.71 enables it, a
+fresh 3.96 disables it), creates raw, docker and oci hosted repositories (oci only where the format
+exists), enables the Docker Bearer Token realm, and pushes image fixtures (single-arch and multi-arch)
+with `crane`. The suite runs nightly, on demand, and before every release against the latest Nexus
+release; from M4 on also against 3.71.
 
 **Coverage and quality gates:** ≥ 80% statements in `internal/`, race detector on Linux, `golangci-lint`
 (errcheck, govet, staticcheck, gosec, revive, …), and `govulncheck`.
@@ -811,15 +821,27 @@ checksum:
   name_template: checksums.txt
 changelog:
   use: github
+homebrew_casks:                     # replaces the deprecated "brews" section since GoReleaser 2.10
+  - repository:
+      owner: yand3r3d3v
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/yand3r3d3v/nx
+    description: Command-line tool for Sonatype Nexus Repository 3
 ```
+
+The Homebrew tap lives in a separate repository (`yand3r3d3v/homebrew-tap`), so users install with
+`brew install yand3r3d3v/tap/nx`. Until the macOS binaries are signed and notarised (NFR-BUILD-5), the
+cask has to remove the quarantine attribute after installation; GoReleaser documents a post-install
+hook for this.
 
 ### 9.3 GitHub Actions
 
 | Workflow | Trigger | Jobs |
 |---|---|---|
 | `ci.yml` | push, pull request | lint; unit tests on ubuntu, macos and windows (Go stable and oldstable); race tests on ubuntu; `goreleaser --snapshot` build of all targets; `govulncheck` |
-| `e2e.yml` | nightly, manual, before release | matrix over Nexus versions (latest, oldest supported): bootstrap container, run `test/e2e` |
-| `release.yml` | tag `v*` | GoReleaser: build, archive, checksums, GitHub Release |
+| `e2e.yml` | nightly, manual, before release | latest Nexus release; matrix with 3.71 added in M4: bootstrap container, run `test/e2e` |
+| `release.yml` | tag `v*` | GoReleaser: build, archive, checksums, GitHub Release, Homebrew tap update (needs a `HOMEBREW_TAP_GITHUB_TOKEN` secret with write access to the tap repository) |
 
 ### 9.4 Versioning
 
@@ -854,8 +876,8 @@ major version. `CHANGELOG.md` follows *Keep a Changelog*.
 
 ## 11. Architecture decision records
 
-Each record states the context, the decision and its consequences. New dependencies and significant
-design changes require a new ADR here.
+Each record states the context, the decision and its consequences. All records below are accepted
+as of 2026-09-26. New dependencies and significant design changes require a new ADR here.
 
 ### ADR-001: Go, cobra and the standard library
 
@@ -889,18 +911,22 @@ design changes require a new ADR here.
   * Both return no body, so no information is lost. Both obey write policy and content validation.
   * The Components API path stays available and is the foundation for generic uploads of other
     formats later.
-  * Open question Q5 in the specification confirms this choice.
+  * Confirmed in review (Q5).
 
 ### ADR-004: Registry API through `/repository/REPO/v2/`
 
 * **Context.** Docker clients need a connector (port, sub-domain or path routing) because they
   cannot address `/repository/…`. Plain HTTP clients such as `nx` can: Nexus serves the full Registry
-  v2 API under `<base>/repository/REPO/v2/`. We verified this on 3.70.1 and 3.96.3, for port
-  connectors, `pathEnabled` repositories and the `oci` format.
-* **Decision.** Always use `<base>/repository/REPO/v2/` by default. Offer a per-repository override
-  only if needed (Q2).
-* **Consequences.** No connector ports or extra hosts in the configuration. The same TLS settings and
-  credentials as for REST. Works behind a reverse proxy that forwards `/repository/`.
+  v2 API under `<base>/repository/REPO/v2/`. We verified this on 3.71.0 and 3.96.3 (on 3.96 also for
+  `pathEnabled` repositories and the `oci` format). Some installations expose the registry
+  differently, e.g. a reverse proxy that serves `https://<domain>/v2/` for one repository.
+* **Decision.** Use `<base>/repository/REPO/v2/` by default. Allow a per-repository override through
+  `--registry-url`, `NX_DOCKER_REGISTRY_URL` or the `docker.registry_urls` map (decided in review,
+  Q2).
+* **Consequences.** No connector ports or extra hosts in the configuration by default: the same TLS
+  settings and credentials as for REST, working behind any reverse proxy that forwards `/repository/`.
+  Installations with their own registry URL configure it once. The same map resolves image references
+  that start with a registry host (FR-IMGREF-3).
 
 ### ADR-005: Tag metadata from Search, deletion through Components
 
@@ -918,13 +944,14 @@ design changes require a new ADR here.
 
 ### ADR-006: Runtime capability detection instead of version checks
 
-* **Context.** Behaviour differs between Nexus versions and database back ends (page sizes, raw path
-  format, search wildcard rules, available endpoints). Version strings do not reveal the database, and
-  new releases appear roughly monthly.
+* **Context.** Behaviour differs between Nexus releases: page sizes, search wildcard rules, available
+  endpoints (Browse API, task creation), task properties, Docker attributes, registry `Link` headers.
+  New releases appear roughly monthly, and the version string does not reveal which features a release
+  has.
 * **Decision.** Normalise data at the client edge, detect optional endpoints on first use, and fall
   back automatically. The server version is informational.
-* **Consequences.** Robust against versions we have not tested. Requires a fake that emulates both
-  dialects.
+* **Consequences.** Robust against releases we have not tested. Requires a fake that emulates both the
+  latest and the oldest supported release.
 
 ### ADR-007: Client-side retention planner
 
@@ -938,9 +965,9 @@ design changes require a new ADR here.
 
 ### ADR-008: Listing strategies
 
-* **Context.** No single listing API is both efficient and available in every version (§5.6.1).
-  `name`/`path` values differ between versions, `group` does not, and whitespace breaks wildcard
-  search.
+* **Context.** No single listing API is both efficient and available in every supported release
+  (§5.6.1). The Browse API is missing on 3.71, `group` addresses directories directly, wildcard rules
+  differ between releases, and whitespace breaks wildcard search.
 * **Decision.** A listing engine with the Browse, Group search, Scan and Stat strategies, selection
   rules, client-side filtering, and automatic fallback on server rejections.
 * **Consequences.** Correct results everywhere and fast results where possible, at the cost of a more
@@ -967,10 +994,10 @@ design changes require a new ADR here.
 ### ADR-011: Consumer-defined interfaces and an in-memory fake Nexus
 
 * **Context.** Most logic (planning, fallbacks, retries, partial failures) must be tested quickly
-  and deterministically, including the behaviour of old versions.
+  and deterministically, including the behaviour of the oldest supported release.
 * **Decision.** Domain packages depend on minimal interfaces. `nexustest` provides an in-memory
-  server with legacy and modern dialects and fault injection. Real-server tests run in the separate
-  e2e suite.
+  server with *latest* and *baseline* dialects and fault injection. Real-server tests run in the
+  separate e2e suite.
 * **Consequences.** Fast, hermetic unit and command tests. The fake has to be maintained alongside
   the client, and the e2e suite keeps it honest.
 
@@ -982,3 +1009,16 @@ design changes require a new ADR here.
   like `aws s3 cp --recursive`. `down` uses the same rule in reverse.
 * **Consequences.** Deterministic results independent of trailing slashes. `up` and `down` are exact
   inverses. The behaviour is shown in help and in `--dry-run` output.
+
+### ADR-013: Supported Nexus releases and priority
+
+* **Context.** Releases up to 3.70 run on OrientDB and behave differently: raw paths without a
+  leading slash, Elasticsearch search rules, `null` versions. Supporting them would double the
+  compatibility work, and there are no plans to use them. Among the supported releases, the latest
+  one has the richest API.
+* **Decision.** Support Nexus 3.71 and newer only. Build and test against the latest release first
+  (milestones M0–M3), then add and test the fallbacks for 3.71–3.9x in M4, before v1.0 (decided in
+  review, Q1).
+* **Consequences.** Fewer normalisation cases, and a two-point e2e matrix (latest and 3.71) from M4 on.
+  Capability detection (ADR-006) is still required, because 3.71 lacks several APIs that later
+  releases have.

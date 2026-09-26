@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review |
-| **Version** | 0.1 |
+| **Status** | Draft; review decisions of 2026-09-26 applied (§11.2) |
+| **Version** | 0.2 |
 | **Date** | 2026-09-26 |
 | **Related documents** | [Architecture](architecture.md) · [Nexus API notes](nexus-api.md) · [Roadmap](roadmap.md) |
 
@@ -29,7 +29,7 @@ tests and the roadmap. Priorities use MoSCoW: **M**ust, **S**hould, **C**ould, *
 8. [Non-functional requirements](#8-non-functional-requirements)
 9. [Required Nexus privileges](#9-required-nexus-privileges)
 10. [Acceptance criteria](#10-acceptance-criteria)
-11. [Assumptions and open questions](#11-assumptions-and-open-questions)
+11. [Assumptions, decisions and open questions](#11-assumptions-decisions-and-open-questions)
 12. [Appendix A: Complete configuration example](#appendix-a-complete-configuration-example)
 13. [Appendix B: Command cheat sheet](#appendix-b-command-cheat-sheet)
 
@@ -82,7 +82,7 @@ is an I/O-bound HTTP client, and Rust would add complexity without real benefit.
 * a generic authenticated REST escape hatch (`nx api`) so that anything not yet covered by a
   dedicated command can still be done without the web UI;
 * human-readable output, a stable `--json` output and documented exit codes;
-* release binaries for Linux, macOS and Windows.
+* release binaries for Linux, macOS and Windows, and a Homebrew tap.
 
 **Out of scope for v1.0 (non-goals):**
 
@@ -159,15 +159,16 @@ as `scratch`, `distroless` and Alpine.
 
 ### 3.2 Nexus Repository versions and editions
 
-* Target product: **Nexus Repository 3**, Community Edition, Pro and legacy OSS builds.
-* Behaviour was verified during design against **3.96.3-01 CE** (H2 database, the latest release as
-  of September 2026) and **3.70.1-02 OSS** (OrientDB). Details are in [nexus-api.md](nexus-api.md).
-* Proposed support policy (open question **Q1**):
-  * **Supported and tested:** 3.71 and newer (all releases that use the SQL datastore: H2 or
-    PostgreSQL).
-  * **Best effort:** 3.60–3.70 (OrientDB). Core features work there, but some capabilities are
-    missing and large listings are slower.
-  * **Not supported:** Nexus Repository 2.
+* **Supported:** Nexus Repository **3.71 and newer**, Community Edition and Pro. These are the
+  releases built on the SQL datastore (H2 or PostgreSQL).
+* **Not supported:** 3.70 and older (OrientDB) and Nexus Repository 2. `nx` contains no workarounds
+  for them.
+* **Priority:** the latest release (3.96 at the time of writing) is the primary target. Milestones
+  M0–M3 are developed and tested against it. Compatibility with older supported releases
+  (3.71–3.9x) follows in milestone M4, before v1.0 (see [roadmap.md](roadmap.md)).
+* Behaviour was verified during design against **3.96.3-01 CE** (the latest release as of September
+  2026) and **3.71.0-06 OSS** (the oldest supported release), both on H2. Details are in
+  [nexus-api.md](nexus-api.md).
 
 **FR-COMPAT-1 (M).** `nx` MUST NOT branch on version numbers for functional behaviour. It MUST detect
 capabilities at run time and fall back gracefully (§3.3). The server version, taken from the
@@ -175,20 +176,26 @@ capabilities at run time and fall back gracefully (§3.3). The server version, t
 
 ### 3.3 Capability matrix
 
-Differences observed between the reference versions, and how `nx` handles them:
+Differences observed between the oldest supported and the latest release, and how `nx` handles
+them. Releases in between may have any mix of these features, which is why `nx` detects capabilities
+instead of comparing version numbers.
 
-| Capability | 3.70.1 (OrientDB) | 3.96.3 (H2) | `nx` behaviour |
+| Capability | 3.71.0 | 3.96.3 | `nx` behaviour |
 |---|---|---|---|
 | Page size of `components`/`assets` listings | 10 | 100 | Never assume a page size; always follow `continuationToken`. |
-| Raw asset `path` / component `name` | `dir/file.txt` | `/dir/file.txt` | Normalise internally; display without a leading slash. |
-| Search wildcards | trailing `*`, any length | trailing `*` with at least 3 preceding characters, no leading `*` | Build queries that satisfy both; fall back to a full scan. |
-| Search index consistency | asynchronous | about 2 s lag after an upload | Documented; retention logic stays safe (§6.8). |
+| Raw asset `path` / component `name` | `/dir/file.txt` | `/dir/file.txt` | Normalise internally; display without the leading slash. |
+| Search: trailing wildcard | any length | at least 3 characters before `*`; no leading `*` | Build queries that satisfy both; fall back to a full scan. |
+| Search: unquoted values with spaces | break wildcard queries | break wildcard queries | Quote exact values; use other strategies for such paths. |
+| Search index consistency | not measured | about 2 s lag after an upload | Documented; retention logic stays safe (§6.8). |
 | Browse REST API (`/v1/repositories/{repo}/browse`) | absent | present, including folder delete | Used when present for directory listings and `--server-side` deletion. |
 | Task create, update and delete API | absent (`405`) | present | `nx gc --create-missing` only where supported. |
 | Task `properties` in task listings | absent | present | Filtering tasks by repository or blob store only where exposed. |
+| System tasks *Admin - Cleanup unused asset blobs* (`assetBlob.cleanup`) | present | present | `nx gc` runs them between Docker GC and compaction. |
 | Docker image attributes (created, OS/arch, total size) | absent | present | Optional columns, shown when available. |
-| Docker Registry API under `/repository/<repo>/v2/` | yes | yes | Default way to reach the registry API (no connector configuration needed). |
-| System tasks *Admin - Cleanup unused asset blobs* (`assetBlob.cleanup`) | absent | present (one per format, every 30 min) | `nx gc` runs them between Docker GC and compaction when present. |
+| Asset `blobCreated`, `blobStoreName` | `null` | set | Optional fields; retention uses `lastModified`, which both provide. |
+| Docker Registry API under `/repository/<repo>/v2/` | yes | yes | Default registry endpoint (§3.4). |
+| Registry pagination `Link` header on that path | points to `/v2/…` without the repository prefix (unusable) | correct | `Link` URLs are never followed; the next request is rebuilt from `n` and `last`. |
+| `oci` format, Docker `pathEnabled` routing | absent | present | `oci` repositories are handled like `docker` ones. |
 
 ### 3.4 Network
 
@@ -201,9 +208,22 @@ path, `https://example.com/nexus`. Every endpoint is derived from it:
 
 **FR-NET-2 (M).** `nx` MUST honour `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
 
-**FR-NET-3 (S).** For setups where only a Docker connector (a dedicated port or host) is reachable
-and `<base>/repository/<repo>/v2/` is blocked by a reverse proxy, a per-repository registry URL
-override MAY be configured (open question **Q2**).
+**FR-NET-3 (M), registry endpoint.** The Docker Registry API endpoint of a repository defaults to
+`<base>/repository/<repo>/`, and `nx` appends `v2/…`. It can be overridden with:
+
+* `--registry-url URL` on `nx docker` commands;
+* `NX_DOCKER_REGISTRY_URL` (applies to the selected repository);
+* `docker.registry_urls` in the config file or a profile: a map from repository name to registry
+  URL.
+
+These sources follow the precedence rules of §5.1.
+
+Example: a reverse proxy forwards `https://registry.example.com/v2/…` to
+`https://registry.example.com/repository/docker-hosted/v2/…`. It is configured with
+`docker.registry_urls: {docker-hosted: https://registry.example.com}`. An override may also point
+to a Docker connector (`https://nexus.example.com:8443`). Requests to the registry endpoint use the
+profile's TLS settings and credentials, because the user configured that endpoint explicitly for the
+profile.
 
 ---
 
@@ -253,9 +273,10 @@ setting, resolved with the precedence rules of §5.1: the `--repo`/`-R` flag, an
 profile, the `NX_DOCKER_REPO` environment variable, then the config file. If it is not set anywhere,
 the command fails with a usage error that lists the docker/oci repositories visible to the user.
 
-**FR-IMGREF-3 (C).** A registry host prefix (`registry.example.com:8443/team/app:1.0`) MAY be
-accepted and mapped to a repository through the `docker.registries` configuration map. Without a
-mapping, a host prefix is a usage error with a hint.
+**FR-IMGREF-3 (S).** An image reference MAY start with a registry host, exactly as it is used with
+`docker pull` (`registry.example.com/team/app:1.0`). The host is matched against the hosts of the
+configured registry URLs (FR-NET-3), which selects the repository. A host that matches no configured
+registry URL is a usage error with a hint.
 
 ### 4.4 Patterns and durations
 
@@ -352,9 +373,11 @@ another server.
 | `NEXUS_PASSWORD_FILE` | Path of a file that contains the password (e.g. a mounted secret). Trailing newline is trimmed. |
 | `NEXUS_CA_CERT` | Path of a PEM bundle with additional trusted CA certificates. |
 | `NEXUS_INSECURE` | `true` disables TLS certificate verification (not recommended). |
+| `NEXUS_CLIENT_CERT`, `NEXUS_CLIENT_KEY` | Client certificate and key (PEM) for servers that require mutual TLS. |
 | `NX_CONFIG` | Config file path. |
 | `NX_PROFILE` | Profile to use. |
 | `NX_DOCKER_REPO` | Default repository for `nx docker` commands. |
+| `NX_DOCKER_REGISTRY_URL` | Registry endpoint for the selected repository (FR-NET-3). |
 | `NO_COLOR` | Disables coloured output ([no-color.org](https://no-color.org)). |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Standard proxy settings. |
 
@@ -397,14 +420,14 @@ profiles:
 | `password_command` | string | none | (S) Command whose stdout is the password (e.g. `pass show nexus/prod`). |
 | `tls.insecure` | bool | `false` | Skip TLS certificate verification. |
 | `tls.ca_file` | path | none | Additional trusted CA bundle (PEM), added to the system roots. |
-| `tls.client_cert`, `tls.client_key` | path | none | (C) Client certificate for mutual TLS. |
+| `tls.client_cert`, `tls.client_key` | path | none | (S) Client certificate and key (PEM) for servers that require mutual TLS. |
 | `timeout` | duration | `60s` | Timeout of a single API request (not of file transfers). |
 | `retries` | int | `3` | Retries of idempotent requests (§8.4). |
 | `concurrency` | int (1–32) | `4` | Parallel transfers and deletions. |
 | `output` | `table`\|`json` | `table` | Default output format. |
 | `docker.repository` | string | none | Default repository for `nx docker`. |
 | `docker.exclude` | list of patterns | `["latest"]` | Tags never deleted by bulk image deletion (§6.8). |
-| `docker.registries` | map host→repo | none | (C) Maps registry hosts in image references to repositories. |
+| `docker.registry_urls` | map repo→URL | none | Registry endpoint per repository (FR-NET-3); also resolves registry hosts in image references (FR-IMGREF-3). |
 | `upload.method` | `put`\|`components` | `put` | Default upload method (§6.3). |
 | `gc.wait_timeout` | duration | `1h` | Maximum time to wait for each task in `nx gc`. |
 | `gc.tasks` | list of task IDs or names | none | Pins the tasks `nx gc` runs, in order. |
@@ -607,8 +630,8 @@ file extension (`application/octet-stream` as a fallback, `--content-type` to ov
 file). The optional method `components` uses the Components API
 (`POST /v1/components?repository=REPO`, multipart fields `raw.directory`, `raw.assetN`,
 `raw.assetN.filename`) and also streams the file. Rationale in
-[architecture.md, ADR-003](architecture.md#adr-003-raw-upload-uses-http-put-by-default); open
-question **Q5**.
+[architecture.md, ADR-003](architecture.md#adr-003-raw-upload-uses-http-put-by-default); confirmed
+in review (Q5).
 
 **FR-UP-5 (M).** Existing remote files are governed by the repository's write policy: *allow
 redeploy* overwrites, *disable redeploy* yields a per-file conflict error (exit code 9 for a single
@@ -730,8 +753,11 @@ Human output lists `deleted REPO/PATH` lines and a summary. JSON:
 ### 6.6 `nx docker ls`
 
 ```
-nx docker ls [-R|--repo REPO] [--match PATTERN] [-l|--long]
+nx docker ls [-R|--repo REPO] [--registry-url URL] [--match PATTERN] [-l|--long]
 ```
+
+**FR-DOCKER-1 (M).** All `nx docker` commands work for repositories of format `docker` and `oci`, and
+accept `-R/--repo REPO` (FR-IMGREF-2) and `--registry-url URL` (FR-NET-3).
 
 **FR-DLS-1 (M).** Lists image names in a repository of format `docker` or `oci` using the Registry
 API catalog (`GET <base>/repository/REPO/v2/_catalog`), following `Link` pagination. If the registry
@@ -760,8 +786,8 @@ per tag, carrying the manifest asset):
 | last pulled | manifest asset `lastDownloaded` | all versions |
 | uploader | manifest asset `uploader` | all versions |
 | media type | manifest asset `contentType` (image manifest vs. index) | all versions |
-| created (build time) | asset `docker.created` | newer versions (3.9x) |
-| size, OS/architecture | asset `docker.totalSize`, `docker.os`, `docker.architecture` | newer versions (3.9x) |
+| created (build time) | asset `docker.created` | recent releases (3.96; not 3.71) |
+| size, OS/architecture | asset `docker.totalSize`, `docker.os`, `docker.architecture` | recent releases (3.96; not 3.71) |
 
 **FR-DTAGS-2 (M).** Tags are also read from the Registry API (`/v2/<name>/tags/list`). Tags that the
 search index does not contain yet (pushed seconds ago) are still listed, with unknown metadata.
@@ -818,8 +844,9 @@ exclusive.
 Example: the tags `latest, v5, v4, v3, v2, v1` (newest first) with `--keep 2` keep `latest`
 (protected), `v5` and `v4`, and delete `v3`, `v2` and `v1`.
 
-**FR-DRM-3 (M), open question Q4.** The default ordering is by push date (`lastModified` of the tag's
-manifest asset). It is not the image build date, which can be fixed or zero in reproducible builds.
+**FR-DRM-3 (M).** The default ordering is by push date (`lastModified` of the tag's manifest asset),
+as decided in review (Q4). It is not the image build date, which can be fixed or zero in
+reproducible builds.
 
 **FR-DRM-4 (M).** Tags pushed in the last seconds may not be in the search index yet (§3.3). They are
 never candidates, so eventual consistency can only make `nx` delete *less*, never more.
@@ -857,16 +884,16 @@ nx gc [--repo REPO]... [--blobstore NAME]... [--task TASK]...
 ```
 
 Deleting Docker tags or files does not free disk space right away. Space is reclaimed by server
-tasks run in order: **Docker - Delete unused manifests and images** (`repository.docker.gc`), on
-newer servers the system tasks **Admin - Cleanup unused asset blobs** (`assetBlob.cleanup`), and
-then **Admin - Compact blob store** (`blobstore.compact`). `nx gc` runs this sequence and waits for
+tasks run in order: **Docker - Delete unused manifests and images** (`repository.docker.gc`), the
+system tasks **Admin - Cleanup unused asset blobs** (`assetBlob.cleanup`, created automatically by
+Nexus for each format in use), and then **Admin - Compact blob store** (`blobstore.compact`). `nx gc` runs this sequence and waits for
 it.
 
 **FR-GC-1 (M), discovery.** `nx` lists tasks (`GET /v1/tasks`) and selects Docker GC tasks, then
 asset blob cleanup tasks (S; only where the server has them), then compaction tasks. `--task`
 (repeatable, task ID or exact name) or the `gc.tasks` config key pin an explicit list and order.
 
-**FR-GC-2 (S), filtering.** Where the server exposes task properties (3.9x):
+**FR-GC-2 (S), filtering.** Where the server exposes task properties (3.96; not 3.71):
 
 * `--repo` selects Docker GC tasks whose `repositoryName` is that repository or `*` (all);
 * `--blobstore` selects compaction tasks by `blobstoreName`;
@@ -877,7 +904,8 @@ Where properties are not exposed, all tasks of each type are run and a warning i
 `--task` is used.
 
 **FR-GC-3 (S).** If no suitable task exists, `nx` fails with exit code 5 and explains how to create
-the tasks. With `--create-missing`, on servers that support the task creation API, `nx` creates
+the tasks. `nx` never creates tasks unless asked (Q10). With `--create-missing`, on servers that
+support the task creation API, `nx` creates
 manual tasks named `nx: Docker GC <repo>` and `nx: Compact <blobstore>`, using the defaults from the
 server's task templates.
 
@@ -901,8 +929,8 @@ by default). `nx` shows the configured offset when the server exposes it.
 
 **FR-GC-7 (M).** `--dry-run` shows the selected tasks in execution order without running them.
 
-**FR-GC-8 (M).** The server may release some storage only later: for example, on newer servers the
-blobs of deleted raw files were not released by an immediate run of the cleanup tasks (see
+**FR-GC-8 (M).** The server may release some storage only later: for example, on 3.96 the blobs of
+deleted raw files were not released by an immediate run of the cleanup tasks (see
 [nexus-api.md](nexus-api.md#storage-reclamation)). `nx gc` reports the blob store sizes before and
 after the run when the user may read them, and its help text explains that disk usage can drop only
 after later scheduled runs.
@@ -1008,6 +1036,7 @@ it queries the server with a short timeout and fails silently.
 | `--password-stdin` | n/a | n/a | off | Read the password from stdin |
 | `--ca-cert PATH` | `NEXUS_CA_CERT` | `tls.ca_file` | none | Extra trusted CA bundle (PEM) |
 | `--insecure` | `NEXUS_INSECURE` | `tls.insecure` | off | Skip TLS verification (prints a warning) |
+| `--client-cert PATH`, `--client-key PATH` | `NEXUS_CLIENT_CERT`, `NEXUS_CLIENT_KEY` | `tls.client_cert`, `tls.client_key` | none | Client certificate for mutual TLS |
 | `--timeout DURATION` | n/a | `timeout` | `60s` | Per-request API timeout |
 | `--retries N` | n/a | `retries` | `3` | Retries of idempotent requests |
 | `--json` | n/a | `output: json` | off | JSON output |
@@ -1102,9 +1131,11 @@ code is used. If the failures have different categories, or some items succeeded
 * **NFR-BUILD-2 (M).** Releases are produced by GoReleaser: `.tar.gz` archives (`.zip` on Windows) and
   a `checksums.txt` with SHA-256 sums, published as GitHub Releases.
 * **NFR-BUILD-3 (S).** Reproducible builds: identical inputs give identical binaries.
-* **NFR-BUILD-4 (C).** Signed checksums (cosign), SBOM, Homebrew tap, Scoop bucket, `.deb`/`.rpm`
-  packages and a container image (open question **Q9**).
-* **NFR-BUILD-5 (S).** Binary size ≤ 15 MB. `nx version` starts in ≤ 50 ms.
+* **NFR-BUILD-4 (M).** A Homebrew tap, updated by GoReleaser on every release, so that users can
+  install and upgrade with `brew`.
+* **NFR-BUILD-5 (C).** Planned after v1.0: signed checksums (cosign), SBOM, Scoop bucket, `.deb`/`.rpm`
+  packages and a container image.
+* **NFR-BUILD-6 (S).** Binary size ≤ 15 MB. `nx version` starts in ≤ 50 ms.
 
 ### 8.2 Dependencies
 
@@ -1162,8 +1193,9 @@ code is used. If the failures have different categories, or some items succeeded
   command wiring.
 * **NFR-QA-2 (M).** CI runs `gofmt`, `go vet`, `golangci-lint` and the race detector, and runs the unit
   tests on Linux, macOS and Windows.
-* **NFR-QA-3 (M).** An end-to-end suite runs against real Nexus containers (the latest release and the
-  oldest supported release) before every release.
+* **NFR-QA-3 (M).** An end-to-end suite runs against a real Nexus container of the latest release
+  from M1 on. From M4 on, it also runs against 3.71, the oldest supported release, before every
+  release.
 * **NFR-DOC-1 (M).** README with a quick start, configuration and examples; this `docs/` folder;
   `CHANGELOG.md`; `CONTRIBUTING.md`; `SECURITY.md`.
 * **NFR-LIC-1 (M).** MIT licence. All dependencies have MIT-compatible licences.
@@ -1203,7 +1235,7 @@ cleanup operator.
 |---|---|---|
 | AC-1 | `nx version` runs on all release platforms (verified in CI by building all targets and running the Linux, macOS and Windows binaries). | M0 |
 | AC-2 | Configuration precedence and credential scoping pass a table-driven test suite that covers every row of §5.1. | M0 |
-| AC-3 | `nx repos --json` against Nexus 3.96 and against the oldest supported version returns the expected repositories; `nx status` detects version and authentication state. | M0 |
+| AC-3 | `nx repos --json` against the latest Nexus release returns the expected repositories; `nx status` detects version and authentication state. | M0 |
 | AC-4 | Uploading a 1 GiB file keeps resident memory below 64 MiB; round trips `up` → `down` preserve content (checksums) and directory layout, including names with spaces and non-ASCII characters. | M1 |
 | AC-5 | A directory of 1,000 files uploads with `--concurrency 8`; injected server failures (500/503) are retried; permanent failures are reported with exit code 6. | M1 |
 | AC-6 | `rm -r --dry-run` lists exactly the files that `rm -r` then deletes; bulk deletion without `--yes` in a non-interactive shell deletes nothing and exits with 2. | M1 |
@@ -1211,11 +1243,12 @@ cleanup operator.
 | AC-8 | `nx docker tags` shows correct digests and push times for images pushed with `docker push` and for multi-arch indexes copied with `crane`. | M2 |
 | AC-9 | `--keep N` keeps the N newest non-protected tags; `latest` is protected by default; deleting a tag leaves other tags with the same digest intact; multi-arch images stay pullable after deletions of other tags plus `nx gc`. | M2 |
 | AC-10 | `nx gc` runs Docker GC, asset blob cleanup (where present) and compaction in this order, waits for each, reports their results, handles a task that is already running, and exits with 8 on timeout. | M3 |
-| AC-11 | The end-to-end suite passes against the latest Nexus release and the oldest supported release; GoReleaser produces the release artifacts; README and command help are complete. | M4 |
+| AC-11 | Every command passes the end-to-end suite against 3.71: listing falls back to search and scan without the Browse API, `nx gc` works without task properties and without the task creation API, and registry pagination works despite the 3.71 `Link` header. | M4 |
+| AC-12 | The end-to-end suite passes against the latest Nexus release and 3.71; GoReleaser publishes the release artifacts and updates the Homebrew tap; README and command help are complete. | M5 |
 
 ---
 
-## 11. Assumptions and open questions
+## 11. Assumptions, decisions and open questions
 
 ### 11.1 Assumptions
 
@@ -1228,23 +1261,40 @@ cleanup operator.
 * **A-4.** Clock skew between client and server is small compared to retention durations
   (`--older-than` is evaluated against server timestamps using the client clock).
 
-### 11.2 Open questions
+### 11.2 Decisions from the review of 2026-09-26
 
-Each question has a proposed default. The design works with the default, and a different answer
-changes only the parts noted under "Impact".
-
-| # | Question | Proposed default | Impact |
+| # | Topic | Decision | Specified in |
 |---|---|---|---|
-| Q1 | Which Nexus versions and editions must be supported? Which database (H2, PostgreSQL, OrientDB)? Is anonymous access enabled? | Support 3.71+ fully, 3.60–3.70 best effort; anonymous access optional | Test matrix, fallbacks, docs |
-| Q2 | How is the Docker registry exposed (connector port, sub-domain, path-based routing; HTTP or HTTPS)? Is `<base>/repository/<repo>/v2/` reachable through your reverse proxy? | Use `<base>/repository/<repo>/v2/`; no connector configuration needed | Adds the per-repository registry URL override of FR-NET-3 to v1.0 if it is not reachable |
-| Q3 | TLS: self-signed or corporate CA certificates? Is mutual TLS (client certificates) needed? | `--ca-cert` and `--insecure` in v1.0; mTLS later | Config keys `tls.client_cert` and `tls.client_key` move to v1.0 |
-| Q4 | "Keep last N tags": order by push date or by tag name/version? Should `latest` be protected by default? | Push date by default; `--sort semver` or `--sort name` as options; `latest` protected | Default of `--sort`, default of `docker.exclude` |
-| Q5 | Raw upload method: the original draft used the Components API; this spec proposes plain HTTP `PUT` as the default, with the Components API as an option. OK? | `PUT` by default | Default of `upload.method` |
-| Q6 | The binary name `nx` clashes with the popular Nx build system (`nx` on npm). Keep `nx` or rename (e.g. `nxr`, `nexctl`)? | Keep `nx` and document the clash | Binary name, module path, docs |
-| Q7 | Several Nexus instances: are profiles needed in v1.0? | Yes (cheap now, a breaking change later) | Config schema |
-| Q8 | Which formats and admin features come after raw and Docker (Maven, npm, PyPI, Helm, apt/yum; repository CRUD, users/roles, cleanup policies)? | Maven and Helm upload, then repository CRUD | Roadmap order |
-| Q9 | Distribution channels beyond GitHub Releases (Homebrew, Scoop, `.deb`/`.rpm`, container image, internal mirror)? | GitHub Releases + checksums in v1.0 | Release pipeline |
-| Q10 | May `nx gc --create-missing` create server tasks, or should task management stay with administrators? | Opt-in flag, off by default | GC behaviour |
+| Q1 | Supported Nexus versions | 3.71 and newer only; older releases are not supported. The latest release (3.96) comes first; 3.71–3.9x compatibility follows in M4. | §3.2 |
+| Q2 | Docker registry endpoint | Default `<base>/repository/<repo>/v2/`; overridable per repository by flag, environment variable or config, e.g. for a reverse proxy that serves the registry at `https://<domain>/v2/`. | FR-NET-3, FR-IMGREF-3 |
+| Q3 | TLS | `--ca-cert` and `--insecure`; mutual TLS (client certificates) as an optional setting for servers that require it. | §5.3, §7.1 |
+| Q4 | Order of "keep the last N tags" | Push date. `--sort semver` and `--sort name` are options. `latest` stays protected by default and can be unprotected through `docker.exclude`. | FR-DRM-2, FR-DRM-3 |
+| Q5 | Raw upload method | HTTP `PUT` by default; Components API with `--method components`. | FR-UP-4, ADR-003 |
+| Q7 | Profiles for several Nexus instances | Included in v1.0. | §5.4 |
+| Q8 | Next formats and admin features | Maven and Helm upload, then repository management. | [roadmap.md](roadmap.md) |
+| Q9 | Distribution | GitHub Releases and a Homebrew tap in v1.0; Scoop, `.deb`/`.rpm`, container image and signing later. | NFR-BUILD-2, NFR-BUILD-4, NFR-BUILD-5 |
+| Q10 | Creating server tasks | Only with `nx gc --create-missing`; never by default. | FR-GC-3 |
+
+### 11.3 Open questions
+
+**Q6: name of the tool.** `nx` clashes with the Nx build system (`nx` on npm) and with another Nexus
+CLI that installs a binary named `nx` ([addozhang/nexus-cli](https://github.com/addozhang/nexus-cli)).
+Candidates, checked on 2026-09-26 against npm, PyPI, crates.io, homebrew-core and a web search:
+
+| Name | Idea | Conflicts found |
+|---|---|---|
+| `nexr` | **Nex**us **R**epository | none |
+| `nx3` | Nexus 3; closest to the current name | none, but it still reads like "Nx" |
+| `nexum` | Latin *nexum*, "bond"; same root as *nexus* | small unrelated libraries on npm, PyPI and crates.io; no CLI |
+| `nexly` | short and playful | none |
+
+Rejected because the name is already used by a CLI: `nexctl` (Nexodus), `nxctl` (another "Nexus"
+CLI), `nxc` (NetExec), `nxus` (the Nxus framework), `nyx` (a release tool), and `nexus-cli` and
+`nexusctl` (used by several Nexus-related projects and packages).
+
+Until Q6 is decided, these documents use `nx` as the working name. Renaming affects the binary name,
+the Go module path, the GitHub repository name, the Homebrew tap and the documentation, so it should
+be decided before v0.1.0.
 
 ---
 
@@ -1273,6 +1323,9 @@ profiles:
     password_env: NEXUS_PROD_PASSWORD
     docker:
       repository: docker-hosted
+      registry_urls:
+        # reverse proxy: https://registry.example.com/v2/ → /repository/docker-hosted/v2/
+        docker-hosted: https://registry.example.com
     gc:
       tasks: ["Docker GC docker-hosted", "Compact default blob store"]
 
@@ -1282,6 +1335,8 @@ profiles:
     password_file: ~/.config/nx/staging.secret
     tls:
       ca_file: /etc/ssl/certs/corp-root-ca.pem
+      client_cert: ~/.config/nx/staging-client.pem   # only if the server requires mutual TLS
+      client_key: ~/.config/nx/staging-client.key
 
   lab:
     url: https://nexus.lab.local
@@ -1314,7 +1369,9 @@ nx rm -r raw-releases/myapp/1.0.0/ --dry-run
 
 # Docker / OCI
 nx docker ls -R docker-hosted
+nx docker ls -R docker-hosted --registry-url https://registry.example.com
 nx docker tags team/app
+nx docker tags registry.example.com/team/app      # host resolved through docker.registry_urls
 nx docker rm team/app:1.0 team/app:1.1
 nx docker rm team/app --keep 10 --older-than 30d --dry-run
 nx docker rm team/app --keep 10 --exclude 're:^v\d+\.\d+\.\d+$' --yes
