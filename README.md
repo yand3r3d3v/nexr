@@ -1,4 +1,4 @@
-# nx
+# nexr
 
 A fast, dependency-free command-line tool for
 [Sonatype Nexus Repository 3](https://www.sonatype.com/products/sonatype-nexus-repository): manage
@@ -14,19 +14,19 @@ files, container images and storage cleanup without the web UI.
 * Works with Nexus Repository 3.71 and newer; the latest release is supported first.
 * One configuration for everything: environment variables (`NEXUS_URL`, `NEXUS_USER`,
   `NEXUS_PASSWORD`), an optional YAML file with profiles for several Nexus instances, and flags.
-* **Files (raw):** `nx ls`, `nx up`, `nx down`, `nx rm`, with recursive transfers, parallelism,
+* **Files (raw):** `nexr ls`, `nexr up`, `nexr down`, `nexr rm`, with recursive transfers, parallelism,
   checksum verification and `--dry-run`.
-* **Docker/OCI:** `nx docker ls`, `nx docker tags`, `nx docker rm`, including retention
+* **Docker/OCI:** `nexr docker ls`, `nexr docker tags`, `nexr docker rm`, including retention
   (`--keep N`, `--older-than`) with previews.
-* **Cleanup:** `nx gc` runs the Docker GC and compaction tasks and waits for them; `nx tasks` runs
+* **Cleanup:** `nexr gc` runs the Docker GC and compaction tasks and waits for them; `nexr tasks` runs
   any server task.
-* **Everything else:** `nx api` sends authenticated REST calls.
+* **Everything else:** `nexr api` sends authenticated REST calls.
 * Readable output, `--json` for scripts, documented exit codes.
 
 ```sh
-nx up ./dist raw-releases/myapp/1.4.0/
-nx docker rm team/app --keep 10 --older-than 30d --dry-run
-nx gc --repo docker-hosted
+nexr up ./dist raw-releases/myapp/1.4.0/
+nexr docker rm team/app --keep 10 --older-than 30d --dry-run
+nexr gc --repo docker-hosted
 ```
 
 ## Documentation

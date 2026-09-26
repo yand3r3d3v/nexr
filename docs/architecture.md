@@ -1,4 +1,4 @@
-# nx: Architecture
+# nexr: Architecture
 
 | | |
 |---|---|
@@ -7,7 +7,7 @@
 | **Date** | 2026-09-26 |
 | **Related documents** | [Specification](specification.md) · [Nexus API notes](nexus-api.md) · [Roadmap](roadmap.md) |
 
-This document describes **how** `nx` is built: its structure, the responsibilities of each package,
+This document describes **how** `nexr` is built: its structure, the responsibilities of each package,
 the main runtime flows, and the decisions behind them. Requirements are defined in
 [specification.md](specification.md) and referenced by ID (for example `FR-UP-4`).
 
@@ -24,7 +24,7 @@ the main runtime flows, and the decisions behind them. Requirements are defined 
 7. [Cross-cutting concerns](#7-cross-cutting-concerns)
 8. [Testing strategy](#8-testing-strategy)
 9. [Build, CI and release](#9-build-ci-and-release)
-10. [Extending nx](#10-extending-nx)
+10. [Extending nexr](#10-extending-nexr)
 11. [Architecture decision records](#11-architecture-decision-records)
 
 ---
@@ -57,15 +57,15 @@ flowchart LR
         registry["Docker Registry v2 API<br/>/repository/REPO/v2/..."]
     end
 
-    user -- "commands, flags" --> nx[[nx]]
-    cfg --> nx
-    fs <-- "upload / download" --> nx
-    nx -- "JSON over HTTPS" --> rest
-    nx -- "GET / HEAD / PUT / DELETE" --> content
-    nx -- "catalog, tags, manifests" --> registry
+    user -- "commands, flags" --> nexr[[nexr]]
+    cfg --> nexr
+    fs <-- "upload / download" --> nexr
+    nexr -- "JSON over HTTPS" --> rest
+    nexr -- "GET / HEAD / PUT / DELETE" --> content
+    nexr -- "catalog, tags, manifests" --> registry
 ```
 
-`nx` talks to a single base URL per profile. All three Nexus surfaces are reached under that URL,
+`nexr` talks to a single base URL per profile. All three Nexus surfaces are reached under that URL,
 so no Docker connector port has to be configured
 ([ADR-004](#adr-004-registry-api-through-repositoryrepov2)).
 
@@ -122,7 +122,7 @@ flowchart TB
    `httptest`.
 3. Shared packages (`config`, `output`, `errs`, `remote`, `buildinfo`) import nothing from the
    layers above.
-4. Only `cmd/nx` and `internal/cli` know about cobra. Only `internal/httpx` builds `http.Client`
+4. Only `cmd/nexr` and `internal/cli` know about cobra. Only `internal/httpx` builds `http.Client`
    values.
 
 A test in CI (`internal/archtest`) checks rules 1 and 4 with `go list -deps`.
@@ -132,21 +132,21 @@ A test in CI (`internal/archtest`) checks rules 1 and 4 with `go list -deps`.
 ## 4. Repository layout
 
 ```
-nx/
-├── cmd/nx/main.go            # entry point: build root command, signals, exit code mapping
+nexr/
+├── cmd/nexr/main.go          # entry point: build root command, signals, exit code mapping
 ├── internal/
 │   ├── cli/                  # presentation layer (one sub-package per command group;
 │   │   │                     #   the "cmd" suffix avoids clashes with domain package names)
 │   │   ├── root.go           #   root command, global flags
 │   │   ├── factory.go        #   lazily constructed dependencies (config, clients, IO)
-│   │   ├── reposcmd/         #   nx repos
-│   │   ├── filescmd/         #   nx ls | up | down | rm
-│   │   ├── dockercmd/        #   nx docker ls | tags | rm
-│   │   ├── taskscmd/         #   nx tasks ..., nx gc
-│   │   ├── apicmd/           #   nx api
-│   │   ├── statuscmd/        #   nx status
-│   │   ├── configcmd/        #   nx config ...
-│   │   └── versioncmd/       #   nx version
+│   │   ├── reposcmd/         #   nexr repos
+│   │   ├── filescmd/         #   nexr ls | up | down | rm
+│   │   ├── dockercmd/        #   nexr docker ls | tags | rm
+│   │   ├── taskscmd/         #   nexr tasks ..., nexr gc
+│   │   ├── apicmd/           #   nexr api
+│   │   ├── statuscmd/        #   nexr status
+│   │   ├── configcmd/        #   nexr config ...
+│   │   └── versioncmd/       #   nexr version
 │   ├── config/               # model, loading, profiles, precedence, credential scoping, secrets
 │   ├── httpx/                # http.Client construction and RoundTripper chain
 │   ├── nexus/                # Nexus REST & content client, models, pagination, errors, capabilities
@@ -175,7 +175,7 @@ nx/
 └── README.md
 ```
 
-The Go module path is `github.com/yand3r3d3v/nx`. The `go` directive is set to the oldest Go
+The Go module path is `github.com/yand3r3d3v/nexr`. The `go` directive is set to the oldest Go
 release still supported upstream (Go 1.26 at the time of writing). Release binaries are built with
 the newest stable Go.
 
@@ -183,7 +183,7 @@ the newest stable Go.
 
 ## 5. Components
 
-### 5.1 Entry point and command framework (`cmd/nx`, `internal/cli`)
+### 5.1 Entry point and command framework (`cmd/nexr`, `internal/cli`)
 
 `main` does four things:
 
@@ -224,21 +224,21 @@ type Factory struct {
 }
 ```
 
-Lazy construction keeps `nx version` and `nx completion` fast and lets them work without any
+Lazy construction keeps `nexr version` and `nexr completion` fast and lets them work without any
 configuration.
 
 ### 5.2 Configuration (`internal/config`)
 
 Responsibilities: locating and parsing the YAML file, reading environment variables, merging the
 sources in precedence order (FR-CFG-1), applying the credential scoping rule (FR-CFG-2), resolving
-password sources, validating, and recording where each value came from (for `nx config view`).
+password sources, validating, and recording where each value came from (for `nexr config view`).
 
 ```mermaid
 flowchart LR
     defaults[built-in defaults] --> merge
     file["config file<br/>top-level + current_profile"] --> merge
-    env["NEXUS_* / NX_* env"] --> merge
-    profile["explicit profile<br/>--profile / NX_PROFILE"] --> merge
+    env["NEXUS_* / NEXR_* env"] --> merge
+    profile["explicit profile<br/>--profile / NEXR_PROFILE"] --> merge
     flags[command-line flags] --> merge
     merge["merge by precedence<br/>+ source tracking"] --> scope["credential scoping<br/>(FR-CFG-2)"]
     scope --> secrets["resolve password source<br/>(env, file, command)"]
@@ -272,12 +272,12 @@ retry  →  user-agent  →  auth (Basic, pre-emptive)  →  logging  →  http.
 | Retries | Idempotent methods only (`GET`, `HEAD`, `PUT`, `DELETE`); network errors, 429, 502, 503, 504; exponential backoff (500 ms, ×2, ±20% jitter), `Retry-After` honoured, 3 retries by default. Request bodies are replayed through `Request.GetBody`: file uploads provide a `GetBody` that reopens the file; stdin uploads have none and are not retried. |
 | Auth | Pre-emptive `Authorization: Basic …` when credentials are configured. Go's redirect policy already drops `Authorization` on cross-host redirects; a test pins this behaviour. |
 | Logging | `log/slog` at debug level: method, redacted URL, status, duration, attempt number; headers at `-vv` with `Authorization`/`Cookie`/`Set-Cookie` redacted. |
-| User agent | `nx/<version> (<os>/<arch>)`. |
+| User agent | `nexr/<version> (<os>/<arch>)`. |
 
 ### 5.4 Nexus client (`internal/nexus`)
 
 The client is organised by API resource. It returns typed models and never exposes `*http.Response`,
-except through the explicit raw method used by `nx api`.
+except through the explicit raw method used by `nexr api`.
 
 ```go
 type Client struct { /* base URL, http.Client, capabilities, server info */ }
@@ -355,7 +355,7 @@ the strategy selection in the domain layer.
 
 ### 5.5 Registry client (`internal/registry`)
 
-A Docker Registry HTTP API v2 client, scoped to one repository. It covers the few calls `nx` needs:
+A Docker Registry HTTP API v2 client, scoped to one repository. It covers the few calls `nexr` needs:
 
 ```go
 func New(hc *http.Client, base *url.URL, creds Credentials) *Client // base = <url>/repository/REPO/
@@ -374,7 +374,7 @@ func (c *Client) Head(ctx context.Context, image, ref string) (Descriptor, error
   `401` with a `WWW-Authenticate: Bearer realm=…,service=…,scope=…` challenge (anonymous or
   token-realm setups), the client obtains a token from the realm, with Basic credentials if
   available, caches it per scope, and retries once.
-* The base URL is resolved per repository from `--registry-url`, `NX_DOCKER_REGISTRY_URL` and
+* The base URL is resolved per repository from `--registry-url`, `NEXR_DOCKER_REGISTRY_URL` and
   `docker.registry_urls[REPO]` with the usual precedence rules, falling back to the default
   `<url>/repository/REPO/` (spec FR-NET-3). The same
   map, inverted (registry host → repository), resolves image references that start with a registry
@@ -436,7 +436,7 @@ flowchart LR
 * **Upload.** The raw adapter streams the file with `PUT` (default) or the Components API
   (multipart assembled on the fly through `io.Pipe`, so nothing is buffered in memory). The optional
   `--verify` compares the local SHA-1, computed while streaming, with the `ETag` from `HEAD`.
-* **Download.** The file is streamed into `<dest-dir>/.nx-<random>.part` while SHA-256 and SHA-1 are
+* **Download.** The file is streamed into `<dest-dir>/.nexr-<random>.part` while SHA-256 and SHA-1 are
   computed. The expected checksum comes from listing metadata (SHA-256) or from the `ETag` (SHA-1).
   On success the file is `fsync`ed, its modification time is set, and it is renamed over the final
   path. On any failure or cancellation the temporary file is removed.
@@ -470,7 +470,7 @@ type Adapter interface {
 func Lookup(format string) (Adapter, bool)
 ```
 
-v1.0 ships the **raw** adapter. `nx up` looks up the adapter for the target repository's format and
+v1.0 ships the **raw** adapter. `nexr up` looks up the adapter for the target repository's format and
 fails with a clear message when there is none or when it lacks the `Upload` capability. Later
 adapters (maven2, helm, apt, yum, …) can use `PUT` or the Components API. Nexus describes the
 multipart fields of each format through `GET /v1/formats/{format}/upload-specs`, which enables a
@@ -602,7 +602,7 @@ text or JSON (FR-OUT-6) and exit codes.
 
 ## 6. Key runtime flows
 
-### 6.1 `nx up ./dist raw-releases/myapp/1.4.0/`
+### 6.1 `nexr up ./dist raw-releases/myapp/1.4.0/`
 
 ```mermaid
 sequenceDiagram
@@ -632,7 +632,7 @@ sequenceDiagram
     CLI->>CLI: print lines, summary, exit code
 ```
 
-### 6.2 `nx docker rm team/app --keep 2`
+### 6.2 `nexr docker rm team/app --keep 2`
 
 ```mermaid
 sequenceDiagram
@@ -661,10 +661,10 @@ sequenceDiagram
         N->>X: DELETE /v1/components/{id}
         X-->>N: 204
     end
-    CLI->>CLI: summary + hint "run nx gc"
+    CLI->>CLI: summary + hint "run nexr gc"
 ```
 
-### 6.3 `nx gc --repo docker-hosted`
+### 6.3 `nexr gc --repo docker-hosted`
 
 ```mermaid
 sequenceDiagram
@@ -715,7 +715,7 @@ sequenceDiagram
   errors).
 * Credential scoping (FR-CFG-2) is enforced in one place (`config.Resolve`) and covered by
   table-driven tests.
-* `nx api` refuses absolute URLs to other hosts. Redirects to other hosts lose `Authorization`.
+* `nexr api` refuses absolute URLs to other hosts. Redirects to other hosts lose `Authorization`.
 * Downloads are confined to the destination directory (§5.6.2).
 * TLS 1.2 is the minimum version. `--insecure` is loud.
 * No implicit configuration from the working directory, and no telemetry.
@@ -743,7 +743,7 @@ sequenceDiagram
 
 * `-v`: one debug line per HTTP attempt; `-vv`: headers and truncated API bodies.
 * Error messages carry the Nexus fault ID when available.
-* `nx status` and `nx config view` are the first tools for troubleshooting, and the README points
+* `nexr status` and `nexr config view` are the first tools for troubleshooting, and the README points
   to them.
 
 ---
@@ -758,7 +758,7 @@ sequenceDiagram
 | **Command** | whole commands in-process: flags → output → exit code | fake `IOStreams`, `nexustest`, golden files (`go test ./... -update` refreshes them) |
 | **End-to-end** | the built binary against real Nexus containers | build tag `e2e`, `scripts/e2e-nexus.sh`, Docker, `crane` for image fixtures |
 
-**The in-memory fake (`internal/nexus/nexustest`)** implements the endpoints `nx` uses: repositories,
+**The in-memory fake (`internal/nexus/nexustest`)** implements the endpoints `nexr` uses: repositories,
 components, assets, search (group/name/version with the wildcard rules), browse, content
 GET/HEAD/PUT/DELETE, registry catalog/tags, and tasks with a simulated state machine. The two
 dialects reproduce the differences listed in spec §3.3: page sizes, the wildcard rule, Browse API and
@@ -784,7 +784,7 @@ release; from M4 on also against 3.71.
 
 | Target | Action |
 |---|---|
-| `make build` | Build `./bin/nx` for the host platform with version ldflags. |
+| `make build` | Build `./bin/nexr` for the host platform with version ldflags. |
 | `make test` | Unit, client, domain and command tests (`go test ./...`). |
 | `make test-race` | Tests with `-race`. |
 | `make lint` | `gofmt` check, `go vet`, `golangci-lint run`. |
@@ -797,19 +797,19 @@ release; from M4 on also against 3.71.
 
 ```yaml
 version: 2
-project_name: nx
+project_name: nexr
 builds:
-  - main: ./cmd/nx
-    binary: nx
+  - main: ./cmd/nexr
+    binary: nexr
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags:
       - -s -w
-      - -X github.com/yand3r3d3v/nx/internal/buildinfo.Version={{.Version}}
-      - -X github.com/yand3r3d3v/nx/internal/buildinfo.Commit={{.Commit}}
-      - -X github.com/yand3r3d3v/nx/internal/buildinfo.Date={{.CommitDate}}
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Version={{.Version}}
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Commit={{.Commit}}
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Date={{.CommitDate}}
     mod_timestamp: "{{ .CommitTimestamp }}"
 archives:
   - formats: [tar.gz]
@@ -826,12 +826,12 @@ homebrew_casks:                     # replaces the deprecated "brews" section si
       owner: yand3r3d3v
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: https://github.com/yand3r3d3v/nx
+    homepage: https://github.com/yand3r3d3v/nexr
     description: Command-line tool for Sonatype Nexus Repository 3
 ```
 
 The Homebrew tap lives in a separate repository (`yand3r3d3v/homebrew-tap`), so users install with
-`brew install yand3r3d3v/tap/nx`. Until the macOS binaries are signed and notarised (NFR-BUILD-5), the
+`brew install yand3r3d3v/tap/nexr`. Until the macOS binaries are signed and notarised (NFR-BUILD-5), the
 cask has to remove the quarantine attribute after installation; GoReleaser documents a post-install
 hook for this.
 
@@ -851,7 +851,7 @@ major version. `CHANGELOG.md` follows *Keep a Changelog*.
 
 ---
 
-## 10. Extending nx
+## 10. Extending nexr
 
 **Adding a command for a new API resource** (e.g. blob stores):
 
@@ -870,7 +870,7 @@ major version. `CHANGELOG.md` follows *Keep a Changelog*.
    (see `GET /v1/formats/{format}/upload-specs`).
 2. Register it in `formats.Lookup`.
 3. Extend `nexustest` and the e2e bootstrap with a repository of that format.
-4. No change to `nx up` itself is needed; it dispatches on the repository format.
+4. No change to `nexr up` itself is needed; it dispatches on the repository format.
 
 ---
 
@@ -916,12 +916,12 @@ as of 2026-09-26. New dependencies and significant design changes require a new 
 ### ADR-004: Registry API through `/repository/REPO/v2/`
 
 * **Context.** Docker clients need a connector (port, sub-domain or path routing) because they
-  cannot address `/repository/…`. Plain HTTP clients such as `nx` can: Nexus serves the full Registry
+  cannot address `/repository/…`. Plain HTTP clients such as `nexr` can: Nexus serves the full Registry
   v2 API under `<base>/repository/REPO/v2/`. We verified this on 3.71.0 and 3.96.3 (on 3.96 also for
   `pathEnabled` repositories and the `oci` format). Some installations expose the registry
   differently, e.g. a reverse proxy that serves `https://<domain>/v2/` for one repository.
 * **Decision.** Use `<base>/repository/REPO/v2/` by default. Allow a per-repository override through
-  `--registry-url`, `NX_DOCKER_REGISTRY_URL` or the `docker.registry_urls` map (decided in review,
+  `--registry-url`, `NEXR_DOCKER_REGISTRY_URL` or the `docker.registry_urls` map (decided in review,
   Q2).
 * **Consequences.** No connector ports or extra hosts in the configuration by default: the same TLS
   settings and credentials as for REST, working behind any reverse proxy that forwards `/repository/`.
@@ -957,9 +957,9 @@ as of 2026-09-26. New dependencies and significant design changes require a new 
 
 * **Context.** Nexus cleanup policies are server-side, apply to whole repositories, and differ by
   edition. Users want ad-hoc "keep the last N tags of this image" with previews.
-* **Decision.** Compute retention in `nx` with a pure planner that has an explicit plan, dry-run and
+* **Decision.** Compute retention in `nexr` with a pure planner that has an explicit plan, dry-run and
   confirmation. Nexus cleanup policies remain a separate, complementary mechanism; they can be managed
-  through `nx api` and possibly dedicated commands later.
+  through `nexr api` and possibly dedicated commands later.
 * **Consequences.** Transparent, testable, edition-independent. Deletion costs one request per tag;
   acceptable with bounded concurrency.
 
@@ -980,7 +980,7 @@ as of 2026-09-26. New dependencies and significant design changes require a new 
   server.
 * **Decision.** Flags > explicit profile > environment > default profile/file > defaults, plus the
   credential scoping rule of FR-CFG-2.
-* **Consequences.** Predictable behaviour that `nx config view` explains. Credentials never cross
+* **Consequences.** Predictable behaviour that `nexr config view` explains. Credentials never cross
   servers implicitly.
 
 ### ADR-010: Stable JSON contract and exit codes
@@ -988,7 +988,7 @@ as of 2026-09-26. New dependencies and significant design changes require a new 
 * **Context.** Scripts depend on output shape and exit codes.
 * **Decision.** Commands render documented view models, never raw Nexus responses. Exit codes follow
   a fixed table (spec §7.4). Both are covered by golden tests.
-* **Consequences.** Nexus API changes do not leak into `nx` output. Changing the contract requires a
+* **Consequences.** Nexus API changes do not leak into `nexr` output. Changing the contract requires a
   major version.
 
 ### ADR-011: Consumer-defined interfaces and an in-memory fake Nexus

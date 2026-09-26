@@ -1,4 +1,4 @@
-# nx: Roadmap
+# nexr: Roadmap
 
 | | |
 |---|---|
@@ -31,9 +31,9 @@
 
 | Area | Deliverables |
 |---|---|
-| Project | `go.mod` (`github.com/yand3r3d3v/nx`), `Makefile`, `.goreleaser.yaml`, `.golangci.yml`, GitHub Actions (`ci.yml`, `release.yml`), `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` |
+| Project | `go.mod` (`github.com/yand3r3d3v/nexr`), `Makefile`, `.goreleaser.yaml`, `.golangci.yml`, GitHub Actions (`ci.yml`, `release.yml`), `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` |
 | Core packages | `buildinfo`, `errs`, `output`, `config` (env, file, flags, profiles, credential scoping, secrets, CA bundle and optional client certificates), `httpx` (TLS, proxy, retries, logging), `nexus` core (errors, pagination, server info), `nexustest` skeleton (*latest* dialect), `archtest` |
-| Commands | `nx version`, `nx completion`, `nx repos [ls\|show]`, `nx status`, `nx config view\|path\|profiles` |
+| Commands | `nexr version`, `nexr completion`, `nexr repos [ls\|show]`, `nexr status`, `nexr config view\|path\|profiles` |
 | Exit criteria | AC-1, AC-2, AC-3 |
 
 ### M1: Raw files → `v0.2.0`
@@ -41,7 +41,7 @@
 | Area | Deliverables |
 |---|---|
 | Packages | `remote` (path parsing and sanitisation), `files` (listing engine: browse, group search, scan, stat; transfer engine; removal), `formats/raw`, `workpool` |
-| Commands | `nx ls`, `nx up`, `nx down`, `nx rm` |
+| Commands | `nexr ls`, `nexr up`, `nexr down`, `nexr rm` |
 | Tests | `scripts/e2e-nexus.sh`, `test/e2e` for raw against the latest release |
 | Exit criteria | AC-4, AC-5, AC-6, AC-7 |
 
@@ -50,8 +50,8 @@
 | Area | Deliverables |
 |---|---|
 | Packages | `registry` (catalog, tags, HEAD, Bearer challenge, `Link` handling), `images`, `retention` |
-| Commands | `nx docker ls`, `nx docker tags`, `nx docker rm` (explicit tags, `--keep`, `--older-than`, `--all`, `--match`, `--exclude`, `--sort`) |
-| Registry endpoint | default `<base>/repository/<repo>/v2/`, overrides via `--registry-url`, `NX_DOCKER_REGISTRY_URL` and `docker.registry_urls`; image references with a registry host |
+| Commands | `nexr docker ls`, `nexr docker tags`, `nexr docker rm` (explicit tags, `--keep`, `--older-than`, `--all`, `--match`, `--exclude`, `--sort`) |
+| Registry endpoint | default `<base>/repository/<repo>/v2/`, overrides via `--registry-url`, `NEXR_DOCKER_REGISTRY_URL` and `docker.registry_urls`; image references with a registry host |
 | Tests | e2e fixtures pushed with `crane` (single-arch, multi-arch index, attestations); a reverse-proxy setup for the registry URL override |
 | Exit criteria | AC-8, AC-9 |
 
@@ -60,7 +60,7 @@
 | Area | Deliverables |
 |---|---|
 | Packages | `tasks` (runner, GC orchestration, task creation from templates) |
-| Commands | `nx tasks ls\|show\|run\|stop`, `nx gc` (including `--create-missing`, opt-in), `nx api` |
+| Commands | `nexr tasks ls\|show\|run\|stop`, `nexr gc` (including `--create-missing`, opt-in), `nexr api` |
 | Investigation | Storage reclamation for raw deletions (the delay applied by *Admin - Cleanup unused asset blobs*; see [nexus-api.md](nexus-api.md#storage-reclamation)) |
 | Exit criteria | AC-10 |
 
@@ -69,7 +69,7 @@
 | Area | Deliverables |
 |---|---|
 | Fake | *baseline* dialect in `nexustest`: page size 10, no Browse API, no task creation API or task properties, no Docker attributes, the 3.71 registry `Link` header, anonymous access enabled by default |
-| Fallbacks | Listing without the Browse API (group search and scan), `nx gc` without task properties and without task creation, optional columns hidden when attributes are missing |
+| Fallbacks | Listing without the Browse API (group search and scan), `nexr gc` without task properties and without task creation, optional columns hidden when attributes are missing |
 | Tests | e2e matrix extended to 3.71; JSON fixtures captured from 3.71 |
 | Exit criteria | AC-11 |
 
@@ -88,20 +88,20 @@
 1. **Upload for more formats**: Maven (path `PUT` with layout validation, or the Components API with
    GAV fields) and Helm first, as decided in review; later apt, yum, nuget, pypi, npm (publish
    protocol), cargo, conda and others. Each format is a `formats.Adapter` (see
-   [architecture.md §10](architecture.md#10-extending-nx)).
-2. **Repository management**: `nx repos create | update | delete` using per-format JSON templates;
+   [architecture.md §10](architecture.md#10-extending-nexr)).
+2. **Repository management**: `nexr repos create | update | delete` using per-format JSON templates;
    `invalidate-cache`, `rebuild-index`, `health-check`.
-3. **Blob stores**: `nx blobstores ls | show | quota`.
+3. **Blob stores**: `nexr blobstores ls | show | quota`.
 4. **Cleanup policies**: listing and editing, where the edition supports it.
 5. **Security administration**: users, roles, privileges, content selectors, realms, anonymous
    access, user tokens.
-6. **Task management**: `nx tasks create | update | rm` on servers with the task API.
-7. **Search**: `nx search` across repositories and formats (keyword, name, version, checksum).
-8. **Copy and sync**: `nx cp` and `nx sync` between repositories or instances (for example, to
+6. **Task management**: `nexr tasks create | update | rm` on servers with the task API.
+7. **Search**: `nexr search` across repositories and formats (keyword, name, version, checksum).
+8. **Copy and sync**: `nexr cp` and `nexr sync` between repositories or instances (for example, to
    promote artifacts from staging to release).
 9. **Docker extras**: image patterns in `docker rm` (`'team/*'`), deletion by digest,
-   `nx docker inspect`.
-10. **Credentials**: OS keychain integration (`nx login`), `password_command` hardening.
+   `nexr docker inspect`.
+10. **Credentials**: OS keychain integration (`nexr login`), `password_command` hardening.
 11. **Distribution**: Scoop bucket, `.deb`/`.rpm`, container image, signed releases, SBOM.
 12. **Transfers**: resumable downloads (HTTP `Range`), checksum-based sync mode for `up` and `down`.
 
@@ -112,6 +112,5 @@
 | Nexus releases roughly monthly; APIs change between releases | Capability detection instead of version checks ([ADR-006](architecture.md#adr-006-runtime-capability-detection-instead-of-version-checks)); e2e against the latest release; refresh test fixtures on every Nexus minor release |
 | Search and browse indexes lag behind writes | Strategies chosen so that lag cannot cause over-deletion (FR-DRM-4); documented behaviour |
 | Slow listings on releases without the Browse API and with page size 10 (3.71) | Group search instead of full scans where possible; progress indication; documented recommendation to upgrade |
-| Binary name `nx` clashes with the Nx build system and another Nexus CLI | Open question Q6; decide before v0.1.0, because renaming later is costly |
 | Pro-only features cannot be tested with Community Edition | Mark Pro-only behaviour in docs; rely on capability detection; ask the community for reports |
-| Storage reclamation is asynchronous on the server | Investigation in M3; `nx gc` reports blob store sizes before and after and explains possible delays |
+| Storage reclamation is asynchronous on the server | Investigation in M3; `nexr gc` reports blob store sizes before and after and explains possible delays |

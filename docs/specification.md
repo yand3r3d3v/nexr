@@ -1,4 +1,4 @@
-# nx: Technical Specification
+# nexr: Technical Specification
 
 | | |
 |---|---|
@@ -7,7 +7,7 @@
 | **Date** | 2026-09-26 |
 | **Related documents** | [Architecture](architecture.md) · [Nexus API notes](nexus-api.md) · [Roadmap](roadmap.md) |
 
-This document says **what** `nx` must do. It is the reference for implementation, code review and
+This document says **what** `nexr` must do. It is the reference for implementation, code review and
 acceptance testing. [architecture.md](architecture.md) covers how the tool is built.
 [nexus-api.md](nexus-api.md) records the Nexus behaviour we observed while designing it.
 
@@ -39,8 +39,8 @@ tests and the roadmap. Priorities use MoSCoW: **M**ust, **S**hould, **C**ould, *
 
 ### 1.1 Product vision
 
-`nx` is a single, self-contained command-line tool for working with
-[Sonatype Nexus Repository 3](https://www.sonatype.com/products/sonatype-nexus-repository)
+`nexr` (short for **Nex**us **R**epository) is a single, self-contained command-line tool for
+working with [Sonatype Nexus Repository 3](https://www.sonatype.com/products/sonatype-nexus-repository)
 without opening the web UI. It serves developers at a terminal, CI/CD pipelines and Nexus
 administrators. It offers one configuration, one set of conventions and consistent commands across
 repository formats and across the Nexus instances a user works with.
@@ -79,18 +79,18 @@ is an I/O-bound HTTP client, and Rust would add complexity without real benefit.
 * path-based file operations (`ls`, `up`, `down`, `rm`), with upload for **raw** repositories;
 * container image operations for repositories of format `docker` and `oci`;
 * running and waiting for server tasks, including the Docker GC plus blob store compaction sequence;
-* a generic authenticated REST escape hatch (`nx api`) so that anything not yet covered by a
+* a generic authenticated REST escape hatch (`nexr api`) so that anything not yet covered by a
   dedicated command can still be done without the web UI;
 * human-readable output, a stable `--json` output and documented exit codes;
 * release binaries for Linux, macOS and Windows, and a Homebrew tap.
 
 **Out of scope for v1.0 (non-goals):**
 
-* pushing or pulling container images. Use `docker`, `podman`, `crane` or `skopeo`; `nx` manages
+* pushing or pulling container images. Use `docker`, `podman`, `crane` or `skopeo`; `nexr` manages
   what is already stored in Nexus;
 * uploading to formats other than raw (planned, see roadmap);
 * administering repositories, security, cleanup policies or blob stores through dedicated commands
-  (planned; available meanwhile through `nx api`);
+  (planned; available meanwhile through `nexr api`);
 * Nexus Repository 2.x;
 * graphical or full-screen terminal UIs;
 * Sonatype IQ Server, Firewall and Lifecycle integrations;
@@ -111,7 +111,7 @@ is an I/O-bound HTTP client, and Rust would add complexity without real benefit.
 | **Remote path** | `REPO/PATH`: address of a file or directory inside a repository. |
 | **Image reference** | `NAME[:TAG]`: a container image (and optionally a tag) inside a docker/oci repository. |
 | **Profile** | Named set of connection settings for one Nexus instance. |
-| **Capability** | A server feature that `nx` detects at runtime (see §3.3). |
+| **Capability** | A server feature that `nexr` detects at runtime (see §3.3). |
 
 ---
 
@@ -129,15 +129,15 @@ is an I/O-bound HTTP client, and Rust would add complexity without real benefit.
 
 | ID | Use case | Example |
 |---|---|---|
-| UC-1 | Publish build artifacts | `nx up ./dist raw-releases/myapp/1.4.0/` |
-| UC-2 | Fetch artifacts during deployment | `nx down raw-releases/myapp/1.4.0/myapp.tar.gz /opt/myapp/` |
-| UC-3 | Explore repository content | `nx ls raw-releases/myapp/` · `nx ls -rl raw-releases/myapp/` |
-| UC-4 | Remove obsolete files safely | `nx rm -r raw-releases/myapp/1.0.0/ --dry-run` |
-| UC-5 | Inspect images and tags | `nx docker ls -R docker-hosted` · `nx docker tags team/app` |
-| UC-6 | Enforce image retention in CI | `nx docker rm team/app --keep 10 --older-than 30d --yes --json` |
-| UC-7 | Reclaim disk space | `nx gc --repo docker-hosted` |
-| UC-8 | Work with several Nexus instances | `nx --profile staging repos` |
-| UC-9 | Do anything else without the web UI | `nx api /v1/blobstores` · `nx tasks run "Compact blob store" --wait` |
+| UC-1 | Publish build artifacts | `nexr up ./dist raw-releases/myapp/1.4.0/` |
+| UC-2 | Fetch artifacts during deployment | `nexr down raw-releases/myapp/1.4.0/myapp.tar.gz /opt/myapp/` |
+| UC-3 | Explore repository content | `nexr ls raw-releases/myapp/` · `nexr ls -rl raw-releases/myapp/` |
+| UC-4 | Remove obsolete files safely | `nexr rm -r raw-releases/myapp/1.0.0/ --dry-run` |
+| UC-5 | Inspect images and tags | `nexr docker ls -R docker-hosted` · `nexr docker tags team/app` |
+| UC-6 | Enforce image retention in CI | `nexr docker rm team/app --keep 10 --older-than 30d --yes --json` |
+| UC-7 | Reclaim disk space | `nexr gc --repo docker-hosted` |
+| UC-8 | Work with several Nexus instances | `nexr --profile staging repos` |
+| UC-9 | Do anything else without the web UI | `nexr api /v1/blobstores` · `nexr tasks run "Compact blob store" --wait` |
 
 ---
 
@@ -145,7 +145,7 @@ is an I/O-bound HTTP client, and Rust would add complexity without real benefit.
 
 ### 3.1 Client platforms
 
-**NFR-PLAT-1 (M).** `nx` MUST be released as one static binary per platform:
+**NFR-PLAT-1 (M).** `nexr` MUST be released as one static binary per platform:
 
 | OS | Architectures |
 |---|---|
@@ -161,7 +161,7 @@ as `scratch`, `distroless` and Alpine.
 
 * **Supported:** Nexus Repository **3.71 and newer**, Community Edition and Pro. These are the
   releases built on the SQL datastore (H2 or PostgreSQL).
-* **Not supported:** 3.70 and older (OrientDB) and Nexus Repository 2. `nx` contains no workarounds
+* **Not supported:** 3.70 and older (OrientDB) and Nexus Repository 2. `nexr` contains no workarounds
   for them.
 * **Priority:** the latest release (3.96 at the time of writing) is the primary target. Milestones
   M0–M3 are developed and tested against it. Compatibility with older supported releases
@@ -170,17 +170,17 @@ as `scratch`, `distroless` and Alpine.
   2026) and **3.71.0-06 OSS** (the oldest supported release), both on H2. Details are in
   [nexus-api.md](nexus-api.md).
 
-**FR-COMPAT-1 (M).** `nx` MUST NOT branch on version numbers for functional behaviour. It MUST detect
+**FR-COMPAT-1 (M).** `nexr` MUST NOT branch on version numbers for functional behaviour. It MUST detect
 capabilities at run time and fall back gracefully (§3.3). The server version, taken from the
 `Server` response header, is informational only.
 
 ### 3.3 Capability matrix
 
-Differences observed between the oldest supported and the latest release, and how `nx` handles
-them. Releases in between may have any mix of these features, which is why `nx` detects capabilities
+Differences observed between the oldest supported and the latest release, and how `nexr` handles
+them. Releases in between may have any mix of these features, which is why `nexr` detects capabilities
 instead of comparing version numbers.
 
-| Capability | 3.71.0 | 3.96.3 | `nx` behaviour |
+| Capability | 3.71.0 | 3.96.3 | `nexr` behaviour |
 |---|---|---|---|
 | Page size of `components`/`assets` listings | 10 | 100 | Never assume a page size; always follow `continuationToken`. |
 | Raw asset `path` / component `name` | `/dir/file.txt` | `/dir/file.txt` | Normalise internally; display without the leading slash. |
@@ -188,9 +188,9 @@ instead of comparing version numbers.
 | Search: unquoted values with spaces | break wildcard queries | break wildcard queries | Quote exact values; use other strategies for such paths. |
 | Search index consistency | not measured | about 2 s lag after an upload | Documented; retention logic stays safe (§6.8). |
 | Browse REST API (`/v1/repositories/{repo}/browse`) | absent | present, including folder delete | Used when present for directory listings and `--server-side` deletion. |
-| Task create, update and delete API | absent (`405`) | present | `nx gc --create-missing` only where supported. |
+| Task create, update and delete API | absent (`405`) | present | `nexr gc --create-missing` only where supported. |
 | Task `properties` in task listings | absent | present | Filtering tasks by repository or blob store only where exposed. |
-| System tasks *Admin - Cleanup unused asset blobs* (`assetBlob.cleanup`) | present | present | `nx gc` runs them between Docker GC and compaction. |
+| System tasks *Admin - Cleanup unused asset blobs* (`assetBlob.cleanup`) | present | present | `nexr gc` runs them between Docker GC and compaction. |
 | Docker image attributes (created, OS/arch, total size) | absent | present | Optional columns, shown when available. |
 | Asset `blobCreated`, `blobStoreName` | `null` | set | Optional fields; retention uses `lastModified`, which both provide. |
 | Docker Registry API under `/repository/<repo>/v2/` | yes | yes | Default registry endpoint (§3.4). |
@@ -206,13 +206,13 @@ path, `https://example.com/nexus`. Every endpoint is derived from it:
 * repository content: `<base>/repository/<repo>/<path>`
 * Docker Registry v2 API: `<base>/repository/<repo>/v2/…`
 
-**FR-NET-2 (M).** `nx` MUST honour `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
+**FR-NET-2 (M).** `nexr` MUST honour `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
 
 **FR-NET-3 (M), registry endpoint.** The Docker Registry API endpoint of a repository defaults to
-`<base>/repository/<repo>/`, and `nx` appends `v2/…`. It can be overridden with:
+`<base>/repository/<repo>/`, and `nexr` appends `v2/…`. It can be overridden with:
 
-* `--registry-url URL` on `nx docker` commands;
-* `NX_DOCKER_REGISTRY_URL` (applies to the selected repository);
+* `--registry-url URL` on `nexr docker` commands;
+* `NEXR_DOCKER_REGISTRY_URL` (applies to the selected repository);
 * `docker.registry_urls` in the config file or a profile: a map from repository name to registry
   URL.
 
@@ -232,7 +232,7 @@ profile.
 ### 4.1 Command syntax
 
 ```
-nx [global flags] <command> [<subcommand>] [flags] [arguments]
+nexr [global flags] <command> [<subcommand>] [flags] [arguments]
 ```
 
 Flags may appear before or after arguments. `--` ends flag parsing, which allows paths that start
@@ -245,7 +245,7 @@ with `-`. Command names are lower-case verbs or nouns; the main commands have sh
 
 * `REPO` is a repository name matching `^[A-Za-z0-9-][A-Za-z0-9_.-]*$`.
 * `PATH` segments are separated by `/`. Paths are case-sensitive and may contain spaces and any
-  Unicode characters; `nx` percent-encodes them on the wire.
+  Unicode characters; `nexr` percent-encodes them on the wire.
 
 **FR-ADDR-2 (M).** A trailing `/` means "directory". Without a trailing slash, each command defines
 how the path is resolved (file, directory or name prefix).
@@ -270,7 +270,7 @@ always use `/`.
 
 **FR-IMGREF-2 (M).** The repository that holds the image is the effective `docker.repository`
 setting, resolved with the precedence rules of §5.1: the `--repo`/`-R` flag, an explicitly selected
-profile, the `NX_DOCKER_REPO` environment variable, then the config file. If it is not set anywhere,
+profile, the `NEXR_DOCKER_REPO` environment variable, then the config file. If it is not set anywhere,
 the command fails with a usage error that lists the docker/oci repositories visible to the user.
 
 **FR-IMGREF-3 (S).** An image reference MAY start with a registry host, exactly as it is used with
@@ -297,24 +297,24 @@ nothing, and exits with 0.
 **FR-SAFE-2 (M).** Deleting a directory requires `-r/--recursive`.
 
 **FR-SAFE-3 (M).** Bulk deletions (more than one item, e.g. `rm -r`, `docker rm --keep`, `--all`)
-need confirmation. On an interactive terminal (stdin and stderr are TTYs) `nx` shows a summary and
+need confirmation. On an interactive terminal (stdin and stderr are TTYs) `nexr` shows a summary and
 asks `[y/N]`. Otherwise `-y/--yes` is required; without it the command fails with exit code 2 and
 deletes nothing.
 
-**FR-SAFE-4 (M).** Deleting the entire content of a repository (`nx rm -r REPO`) needs stronger
+**FR-SAFE-4 (M).** Deleting the entire content of a repository (`nexr rm -r REPO`) needs stronger
 confirmation: interactively the user must type the repository name; non-interactively `--yes` is
 required.
 
-**FR-SAFE-5 (M).** Deleting one explicitly named item (`nx rm REPO/file.txt`,
-`nx docker rm app:1.0`) does not prompt.
+**FR-SAFE-5 (M).** Deleting one explicitly named item (`nexr rm REPO/file.txt`,
+`nexr docker rm app:1.0`) does not prompt.
 
 **FR-SAFE-6 (M).** Bulk operations continue after individual failures, report every failure, and
 end with a summary (succeeded / failed / skipped). Exit codes follow §7.4.
 
 ### 4.6 Idempotency and scripting
 
-**FR-SCRIPT-1 (M).** `nx` MUST NOT prompt or wait for input when stdin is not a terminal, apart from
-reading data explicitly requested from stdin (`-`, `--password-stdin`, `nx api -d @-`).
+**FR-SCRIPT-1 (M).** `nexr` MUST NOT prompt or wait for input when stdin is not a terminal, apart from
+reading data explicitly requested from stdin (`-`, `--password-stdin`, `nexr api -d @-`).
 
 **FR-SCRIPT-2 (S).** Deletions accept `--ignore-missing`, which makes a missing target a success.
 Uploads accept `--skip-existing`. Together they make repeated runs of a pipeline safe.
@@ -328,8 +328,8 @@ Uploads accept `--skip-existing`. Together they make repeated runs of a pipeline
 **FR-CFG-1 (M).** Settings come from the following sources, highest precedence first:
 
 1. **command-line flags**;
-2. the **profile selected explicitly** with `--profile` or `NX_PROFILE`;
-3. **environment variables** (`NEXUS_*`, `NX_*`);
+2. the **profile selected explicitly** with `--profile` or `NEXR_PROFILE`;
+3. **environment variables** (`NEXUS_*`, `NEXR_*`);
 4. the **config file**: the default profile (`current_profile`) merged over the top-level settings;
 5. **built-in defaults**.
 
@@ -350,16 +350,16 @@ higher-precedence source unless both URLs are identical after normalisation.
 | `--profile staging` | `NEXUS_USER`/`NEXUS_PASSWORD` | only if `NEXUS_URL` equals the staging URL |
 | anything | `--user` + `--password`/`--password-stdin` | yes (explicit) |
 
-If credentials are dropped because of this rule, `nx` prints a warning in verbose mode. If the
+If credentials are dropped because of this rule, `nexr` prints a warning in verbose mode. If the
 server then answers 401, the error hint mentions the rule.
 
 **FR-CFG-3 (M).** The config file location is, in order:
 
-* `--config PATH` or `NX_CONFIG` (the file MUST exist);
-* Linux and macOS: `$XDG_CONFIG_HOME/nx/config.yaml`, default `~/.config/nx/config.yaml`;
-* Windows: `%AppData%\nx\config.yaml`.
+* `--config PATH` or `NEXR_CONFIG` (the file MUST exist);
+* Linux and macOS: `$XDG_CONFIG_HOME/nexr/config.yaml`, default `~/.config/nexr/config.yaml`;
+* Windows: `%AppData%\nexr\config.yaml`.
 
-A missing default config file is not an error. `nx` MUST NOT read configuration implicitly from the
+A missing default config file is not an error. `nexr` MUST NOT read configuration implicitly from the
 current working directory: a repository-controlled file could otherwise redirect credentials to
 another server.
 
@@ -374,10 +374,10 @@ another server.
 | `NEXUS_CA_CERT` | Path of a PEM bundle with additional trusted CA certificates. |
 | `NEXUS_INSECURE` | `true` disables TLS certificate verification (not recommended). |
 | `NEXUS_CLIENT_CERT`, `NEXUS_CLIENT_KEY` | Client certificate and key (PEM) for servers that require mutual TLS. |
-| `NX_CONFIG` | Config file path. |
-| `NX_PROFILE` | Profile to use. |
-| `NX_DOCKER_REPO` | Default repository for `nx docker` commands. |
-| `NX_DOCKER_REGISTRY_URL` | Registry endpoint for the selected repository (FR-NET-3). |
+| `NEXR_CONFIG` | Config file path. |
+| `NEXR_PROFILE` | Profile to use. |
+| `NEXR_DOCKER_REPO` | Default repository for `nexr docker` commands. |
+| `NEXR_DOCKER_REGISTRY_URL` | Registry endpoint for the selected repository (FR-NET-3). |
 | `NO_COLOR` | Disables coloured output ([no-color.org](https://no-color.org)). |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Standard proxy settings. |
 
@@ -387,8 +387,8 @@ another server.
 Keys inside `profiles.<name>` override them.
 
 ```yaml
-# ~/.config/nx/config.yaml
-current_profile: prod            # used when --profile / NX_PROFILE are not given
+# ~/.config/nexr/config.yaml
+current_profile: prod            # used when --profile / NEXR_PROFILE are not given
 
 # Defaults for all profiles
 timeout: 60s
@@ -404,7 +404,7 @@ profiles:
   staging:
     url: https://staging.example.com/nexus
     user: alice
-    password_file: ~/.config/nx/staging.secret
+    password_file: ~/.config/nexr/staging.secret
     tls:
       ca_file: /etc/ssl/certs/corp-root-ca.pem
 ```
@@ -425,32 +425,32 @@ profiles:
 | `retries` | int | `3` | Retries of idempotent requests (§8.4). |
 | `concurrency` | int (1–32) | `4` | Parallel transfers and deletions. |
 | `output` | `table`\|`json` | `table` | Default output format. |
-| `docker.repository` | string | none | Default repository for `nx docker`. |
+| `docker.repository` | string | none | Default repository for `nexr docker`. |
 | `docker.exclude` | list of patterns | `["latest"]` | Tags never deleted by bulk image deletion (§6.8). |
 | `docker.registry_urls` | map repo→URL | none | Registry endpoint per repository (FR-NET-3); also resolves registry hosts in image references (FR-IMGREF-3). |
 | `upload.method` | `put`\|`components` | `put` | Default upload method (§6.3). |
-| `gc.wait_timeout` | duration | `1h` | Maximum time to wait for each task in `nx gc`. |
-| `gc.tasks` | list of task IDs or names | none | Pins the tasks `nx gc` runs, in order. |
+| `gc.wait_timeout` | duration | `1h` | Maximum time to wait for each task in `nexr gc`. |
+| `gc.tasks` | list of task IDs or names | none | Pins the tasks `nexr gc` runs, in order. |
 | `profiles` | map | none | Named profiles; each accepts every key above except `current_profile` and `profiles`. |
 
 **FR-CFG-5 (M).** Only one password source may be set per source level; two or more is a
 configuration error (exit 3).
 
 **FR-CFG-6 (S).** Unknown keys produce a warning on stderr that names the key path. The file is
-still loaded, so older `nx` versions can read newer files.
+still loaded, so older `nexr` versions can read newer files.
 
-**FR-CFG-7 (S).** On Unix, if the file contains `password` and is readable by group or others, `nx`
+**FR-CFG-7 (S).** On Unix, if the file contains `password` and is readable by group or others, `nexr`
 prints a warning that recommends `chmod 600`.
 
 ### 5.4 Profiles
 
-**FR-CFG-8 (M).** A profile is selected by `--profile`, then `NX_PROFILE`, then `current_profile`. If
+**FR-CFG-8 (M).** A profile is selected by `--profile`, then `NEXR_PROFILE`, then `current_profile`. If
 none of them is set, only the top-level settings (plus environment and flags) apply. An unknown
 profile name is a configuration error (exit 3).
 
 ### 5.5 Credentials and authentication
 
-**FR-AUTH-1 (M).** `nx` authenticates with HTTP Basic auth. This works with a user name and password,
+**FR-AUTH-1 (M).** `nexr` authenticates with HTTP Basic auth. This works with a user name and password,
 and with Nexus **user tokens** (name code and pass code), which are the recommended choice for CI.
 When credentials are configured, Basic auth is sent pre-emptively; otherwise requests are anonymous,
 which works if anonymous access is enabled on the server.
@@ -460,14 +460,14 @@ which works if anonymous access is enabled on the server.
 `NEXUS_PASSWORD`, `NEXUS_PASSWORD_FILE`, then the config keys `password`, `password_env`,
 `password_file` and `password_command`. This order applies within the precedence levels of §5.1.
 
-**FR-AUTH-3 (M).** For Docker Registry API calls `nx` also supports the Bearer-token challenge
+**FR-AUTH-3 (M).** For Docker Registry API calls `nexr` also supports the Bearer-token challenge
 (`WWW-Authenticate: Bearer realm=…`). This happens when anonymous or Docker Bearer Token Realm access
 is configured.
 
 **FR-AUTH-4 (M).** If credentials would be sent over plain `http://` to a host that is not a loopback
-address, `nx` prints a warning.
+address, `nexr` prints a warning.
 
-**FR-AUTH-5 (C).** Storing credentials in the OS keychain (`nx login`) is planned after v1.0.
+**FR-AUTH-5 (C).** Storing credentials in the OS keychain (`nexr login`) is planned after v1.0.
 
 ---
 
@@ -478,27 +478,27 @@ Each command section lists its synopsis, behaviour, output, exit codes and examp
 
 | Command | Purpose | Priority | Milestone |
 |---|---|---|---|
-| `nx repos [ls]` | List repositories | M | M0 |
-| `nx repos show REPO` | Repository details | S | M0 |
-| `nx status` | Connectivity, version and authentication check | S | M0 |
-| `nx config view \| path \| profiles` | Inspect the effective configuration | S | M0 |
-| `nx version`, `nx completion` | Version info, shell completion | M | M0 |
-| `nx ls` | List files and directories | M | M1 |
-| `nx up` | Upload files and directories (raw) | M | M1 |
-| `nx down` | Download files and directories | M | M1 |
-| `nx rm` | Delete files and directories | M | M1 |
-| `nx docker ls` | List images | M | M2 |
-| `nx docker tags` | List tags with metadata | M | M2 |
-| `nx docker rm` | Delete tags, apply retention | M | M2 |
-| `nx tasks ls \| show \| run \| stop` | Server task operations | S | M3 |
-| `nx gc` | Docker GC plus blob store compaction | M | M3 |
-| `nx api` | Authenticated REST escape hatch | S | M3 |
+| `nexr repos [ls]` | List repositories | M | M0 |
+| `nexr repos show REPO` | Repository details | S | M0 |
+| `nexr status` | Connectivity, version and authentication check | S | M0 |
+| `nexr config view \| path \| profiles` | Inspect the effective configuration | S | M0 |
+| `nexr version`, `nexr completion` | Version info, shell completion | M | M0 |
+| `nexr ls` | List files and directories | M | M1 |
+| `nexr up` | Upload files and directories (raw) | M | M1 |
+| `nexr down` | Download files and directories | M | M1 |
+| `nexr rm` | Delete files and directories | M | M1 |
+| `nexr docker ls` | List images | M | M2 |
+| `nexr docker tags` | List tags with metadata | M | M2 |
+| `nexr docker rm` | Delete tags, apply retention | M | M2 |
+| `nexr tasks ls \| show \| run \| stop` | Server task operations | S | M3 |
+| `nexr gc` | Docker GC plus blob store compaction | M | M3 |
+| `nexr api` | Authenticated REST escape hatch | S | M3 |
 
-### 6.1 `nx repos`
+### 6.1 `nexr repos`
 
 ```
-nx repos [ls] [--format FORMAT] [--type hosted|proxy|group] [--match PATTERN]
-nx repos show REPO
+nexr repos [ls] [--format FORMAT] [--type hosted|proxy|group] [--match PATTERN]
+nexr repos show REPO
 ```
 
 **FR-REPOS-1 (M).** Lists the repositories the user can browse (`GET /v1/repositories`), sorted by
@@ -517,14 +517,14 @@ JSON output (`--json`): an array of
 `{"name", "format", "type", "url", "online"}`. `online` is `null` when the server does not report it.
 With `-q`, repository names are printed, one per line.
 
-**FR-REPOS-2 (S).** `nx repos show REPO` prints details: format, type, URL and online status. If the
+**FR-REPOS-2 (S).** `nexr repos show REPO` prints details: format, type, URL and online status. If the
 user may read the repository configuration, it also prints the blob store, write policy, cleanup
 policies and, for Docker, the connector settings (`GET /v1/repositories/{format}/{type}/{name}`).
 
-### 6.2 `nx ls`
+### 6.2 `nexr ls`
 
 ```
-nx ls REPO[/PATH] [-r|--recursive] [-l|--long] [--match PATTERN]
+nexr ls REPO[/PATH] [-r|--recursive] [-l|--long] [--match PATTERN]
                   [--sort name|size|time] [--reverse]
 ```
 
@@ -538,7 +538,7 @@ every format, because every asset has a path (e.g. `maven-releases/com/example/a
 3. `REPO/PATH` without a trailing slash: if a directory `PATH` exists, its contents are listed; else,
    if a file `PATH` exists, that file is shown; else `PATH` is treated as a **name prefix**. The
    entries of the parent directory whose names start with the last segment are listed, so
-   `nx ls raw/app/1.` shows `1.0/` and `1.1/`.
+   `nexr ls raw/app/1.` shows `1.0/` and `1.1/`.
 4. If nothing matches, the command fails with exit code 5.
 
 **FR-LS-2 (M).** Without `-r`, one level is shown: directories first, each with a trailing `/`, then
@@ -549,14 +549,14 @@ directory, and directory entries are omitted.
 (checksums, uploader, IDs and so on), as if `-l` had been given.
 
 ```
-$ nx ls -l raw-releases/myapp/
+$ nexr ls -l raw-releases/myapp/
        -  -                 1.3.0/
        -  -                 1.4.0/
   1.2 KiB 2026-09-20 14:03  README.md
 ```
 
 **FR-LS-4 (M).** `-q` prints full remote references (`REPO/PATH`), one per line, so the output can be
-piped into other `nx` commands (e.g. `xargs nx rm`).
+piped into other `nexr` commands (e.g. `xargs nexr rm`).
 
 **FR-LS-5 (M).** JSON output is an array of entries:
 
@@ -588,11 +588,11 @@ full scan is required.
 **FR-LS-7 (M).** The Nexus search and browse indexes can lag a few seconds behind uploads (§3.3). The
 command help and README MUST mention this.
 
-### 6.3 `nx up`
+### 6.3 `nexr up`
 
 ```
-nx up SRC... REPO[/PATH]
-nx up - REPO/PATH                         # upload from stdin
+nexr up SRC... REPO[/PATH]
+nexr up - REPO/PATH                         # upload from stdin
       [--include PATTERN]... [--exclude PATTERN]... [--follow-symlinks]
       [--skip-existing] [--method put|components] [--content-type TYPE]
       [--verify] [--concurrency N] [--dry-run]
@@ -614,8 +614,8 @@ repository.** Other formats are rejected with a clear message and a hint about t
 | `-` (stdin) | `REPO/PATH` (exact file path) | streamed upload; no retries, because the stream cannot be replayed |
 
 Directory contents are uploaded without the directory name itself, as `aws s3 cp --recursive` does.
-This makes `nx up ./build R/x/` and `nx down R/x/ ./build` exact inverses. To keep the directory
-name, include it in the destination (`nx up ./build R/x/build/`).
+This makes `nexr up ./build R/x/` and `nexr down R/x/ ./build` exact inverses. To keep the directory
+name, include it in the destination (`nexr up ./build R/x/build/`).
 
 **FR-UP-2 (M).** Directories are walked recursively. `--include`/`--exclude` patterns are matched
 against the path relative to the source directory. Hidden files are included by default. Symbolic
@@ -635,13 +635,13 @@ in review (Q5).
 
 **FR-UP-5 (M).** Existing remote files are governed by the repository's write policy: *allow
 redeploy* overwrites, *disable redeploy* yields a per-file conflict error (exit code 9 for a single
-file). With `--skip-existing`, `nx` issues `HEAD` for each target first and skips files that
+file). With `--skip-existing`, `nexr` issues `HEAD` for each target first and skips files that
 already exist.
 
 **FR-UP-6 (M).** Files are uploaded in parallel (`--concurrency`, default 4). Failed files are retried
 according to §8.4, re-reading the file from disk.
 
-**FR-UP-7 (S).** With `--verify`, after each upload `nx` compares the local SHA-1 with the SHA-1 that
+**FR-UP-7 (S).** With `--verify`, after each upload `nexr` compares the local SHA-1 with the SHA-1 that
 Nexus returns as the `ETag` of the stored file (observed behaviour, see
 [nexus-api.md](nexus-api.md#content-endpoints)).
 
@@ -671,10 +671,10 @@ JSON output:
 }
 ```
 
-### 6.4 `nx down`
+### 6.4 `nexr down`
 
 ```
-nx down REPO/PATH [DEST]
+nexr down REPO/PATH [DEST]
         [--include PATTERN]... [--exclude PATTERN]... [--skip-existing]
         [--no-verify] [--concurrency N] [--dry-run]
 ```
@@ -705,7 +705,7 @@ leaves a truncated file under the final name.
 
 **FR-DOWN-5 (M), path safety.** Remote paths are sanitised before they are mapped to local paths.
 Absolute paths, `..` segments, drive letters and names that are invalid on the local OS (e.g.
-`CON`, `aux.txt`, `a:b` on Windows) are rejected per file. `nx` MUST NEVER write outside `DEST`.
+`CON`, `aux.txt`, `a:b` on Windows) are rejected per file. `nexr` MUST NEVER write outside `DEST`.
 
 **FR-DOWN-6 (S).** The local modification time is set to the remote `Last-Modified`.
 `--skip-existing` skips files that already exist locally.
@@ -713,13 +713,13 @@ Absolute paths, `..` segments, drive letters and names that are invalid on the l
 **FR-DOWN-7 (C).** Interrupted downloads of large files are resumed with HTTP `Range`, which Nexus
 supports.
 
-Output mirrors `nx up`: `downloaded` lines, a summary, and a JSON object with `downloaded`,
+Output mirrors `nexr up`: `downloaded` lines, a summary, and a JSON object with `downloaded`,
 `skipped`, `failed` and `summary`.
 
-### 6.5 `nx rm`
+### 6.5 `nexr rm`
 
 ```
-nx rm REPO/PATH... [-r|--recursive] [--include PATTERN]... [--exclude PATTERN]...
+nexr rm REPO/PATH... [-r|--recursive] [--include PATTERN]... [--exclude PATTERN]...
                    [--ignore-missing] [--server-side [--wait-timeout DURATION]]
                    [--concurrency N] [--dry-run] [-y|--yes]
 ```
@@ -733,12 +733,12 @@ executes the plan in parallel. `--dry-run` prints the plan and stops.
 
 **FR-RM-3 (M), deletion method.** For raw repositories, each file is deleted with
 `DELETE <base>/repository/REPO/PATH`, which needs only the *delete* privilege. For other formats,
-`nx` deletes assets by ID (`DELETE /v1/assets/{id}`), with IDs taken from the listing. Deleting the
+`nexr` deletes assets by ID (`DELETE /v1/assets/{id}`), with IDs taken from the listing. Deleting the
 last asset of a raw component also removes the component (verified).
 
 **FR-RM-4 (S).** `--server-side` deletes a directory with the Browse API folder delete
 (`DELETE /v1/repositories/{repo}/browse?path=`). The request only *starts* an asynchronous deletion
-on the server, so `nx` polls the listing until the folder is gone or `--wait-timeout` (default
+on the server, so `nexr` polls the listing until the folder is gone or `--wait-timeout` (default
 10 minutes) expires. This mode
 needs a Nexus version that provides the Browse API and higher privileges (§9). It is meant for very
 large folders.
@@ -750,28 +750,28 @@ visible until the *Repair - Repository trim browse tree* task runs. The command 
 Human output lists `deleted REPO/PATH` lines and a summary. JSON:
 `{"dry_run", "deleted": [...], "missing": [...], "failed": [...], "summary": {...}}`.
 
-### 6.6 `nx docker ls`
+### 6.6 `nexr docker ls`
 
 ```
-nx docker ls [-R|--repo REPO] [--registry-url URL] [--match PATTERN] [-l|--long]
+nexr docker ls [-R|--repo REPO] [--registry-url URL] [--match PATTERN] [-l|--long]
 ```
 
-**FR-DOCKER-1 (M).** All `nx docker` commands work for repositories of format `docker` and `oci`, and
+**FR-DOCKER-1 (M).** All `nexr docker` commands work for repositories of format `docker` and `oci`, and
 accept `-R/--repo REPO` (FR-IMGREF-2) and `--registry-url URL` (FR-NET-3).
 
 **FR-DLS-1 (M).** Lists image names in a repository of format `docker` or `oci` using the Registry
 API catalog (`GET <base>/repository/REPO/v2/_catalog`), following `Link` pagination. If the registry
-endpoint is unavailable, `nx` falls back to deriving names from the Components API.
+endpoint is unavailable, `nexr` falls back to deriving names from the Components API.
 
 **FR-DLS-2 (S).** `-l` adds the tag count and the most recent push time for each image.
 
 JSON: `[{"repository": "docker-hosted", "name": "team/app", "tag_count": 3, "last_pushed": "…"}]`.
 Without `-l`, the fields `tag_count` and `last_pushed` are `null`. `-q` prints names only.
 
-### 6.7 `nx docker tags`
+### 6.7 `nexr docker tags`
 
 ```
-nx docker tags IMAGE [-R|--repo REPO] [--match PATTERN]
+nexr docker tags IMAGE [-R|--repo REPO] [--match PATTERN]
                      [--sort pushed|name|semver] [--reverse] [-l|--long]
 ```
 
@@ -796,7 +796,7 @@ search index does not contain yet (pushed seconds ago) are still listed, with un
 SemVer (optionally prefixed with `v`) by version precedence and lists all other tags after them.
 
 ```
-$ nx docker tags team/app
+$ nexr docker tags team/app
 TAG      DIGEST               PUSHED            SIZE
 latest   sha256:b7f3d86d6e84  2026-09-26 16:14  2.10 MB
 1.1      sha256:b7f3d86d6e84  2026-09-26 16:13  2.10 MB
@@ -807,13 +807,13 @@ JSON: array of
 `{"repository", "image", "tag", "digest", "media_type", "pushed", "created", "last_pulled", "size", "os", "architecture", "uploader", "component_id"}`.
 `size` is reported as the server provides it (a string) or `null`.
 
-### 6.8 `nx docker rm`
+### 6.8 `nexr docker rm`
 
 ```
-nx docker rm IMAGE:TAG [IMAGE:TAG...]   [-R REPO] [--ignore-missing] [--dry-run]
-nx docker rm IMAGE --keep N             [retention flags] [--dry-run] [-y]
-nx docker rm IMAGE --older-than DURATION [retention flags] [--dry-run] [-y]
-nx docker rm IMAGE --all                [retention flags] [--dry-run] [-y]
+nexr docker rm IMAGE:TAG [IMAGE:TAG...]   [-R REPO] [--ignore-missing] [--dry-run]
+nexr docker rm IMAGE --keep N             [retention flags] [--dry-run] [-y]
+nexr docker rm IMAGE --older-than DURATION [retention flags] [--dry-run] [-y]
+nexr docker rm IMAGE --all                [retention flags] [--dry-run] [-y]
 
 retention flags: [--match PATTERN]... [--exclude PATTERN]... [--sort pushed|semver|name]
                  [--concurrency N]
@@ -824,7 +824,7 @@ API (`name`, `version`) and deleted with `DELETE /v1/components/{id}`. Only that
 Other tags that point to the same digest are not affected (verified). A missing tag gives exit code
 5 unless `--ignore-missing` is set.
 
-**FR-DRM-2 (M), retention.** For a bare `IMAGE` with `--keep`, `--older-than` or `--all`, `nx` computes
+**FR-DRM-2 (M), retention.** For a bare `IMAGE` with `--keep`, `--older-than` or `--all`, `nexr` computes
 a deletion plan:
 
 1. Collect all tags of the image (§6.7).
@@ -849,17 +849,17 @@ as decided in review (Q4). It is not the image build date, which can be fixed or
 reproducible builds.
 
 **FR-DRM-4 (M).** Tags pushed in the last seconds may not be in the search index yet (§3.3). They are
-never candidates, so eventual consistency can only make `nx` delete *less*, never more.
+never candidates, so eventual consistency can only make `nexr` delete *less*, never more.
 
-**FR-DRM-5 (M).** `nx docker rm` never deletes manifests referenced by digest (the children of
+**FR-DRM-5 (M).** `nexr docker rm` never deletes manifests referenced by digest (the children of
 multi-arch indexes and attestations). Unreferenced manifests and layers are cleaned up by the
-server-side Docker GC task (`nx gc`). After a successful deletion `nx` prints the reminder
-`hint: run "nx gc" to reclaim storage`.
+server-side Docker GC task (`nexr gc`). After a successful deletion `nexr` prints the reminder
+`hint: run "nexr gc" to reclaim storage`.
 
 **FR-DRM-6 (M).** The plan is shown before confirmation and in `--dry-run` mode:
 
 ```
-$ nx docker rm team/app --keep 2 --dry-run
+$ nexr docker rm team/app --keep 2 --dry-run
 TAG      PUSHED            ACTION  REASON
 latest   2026-09-26 16:14  keep    protected (latest)
 v5       2026-09-25 10:02  keep    newest 2
@@ -875,10 +875,10 @@ JSON: `{"repository", "image", "dry_run", "decisions": [{"tag", "pushed", "actio
 **FR-DRM-7 (C).** `IMAGE` MAY be a pattern (e.g. `'team/*'`). The policy is then applied to each
 matching image separately.
 
-### 6.9 `nx gc`
+### 6.9 `nexr gc`
 
 ```
-nx gc [--repo REPO]... [--blobstore NAME]... [--task TASK]...
+nexr gc [--repo REPO]... [--blobstore NAME]... [--task TASK]...
       [--skip-docker] [--skip-compact] [--create-missing]
       [--no-wait] [--wait-timeout DURATION] [--dry-run]
 ```
@@ -886,10 +886,10 @@ nx gc [--repo REPO]... [--blobstore NAME]... [--task TASK]...
 Deleting Docker tags or files does not free disk space right away. Space is reclaimed by server
 tasks run in order: **Docker - Delete unused manifests and images** (`repository.docker.gc`), the
 system tasks **Admin - Cleanup unused asset blobs** (`assetBlob.cleanup`, created automatically by
-Nexus for each format in use), and then **Admin - Compact blob store** (`blobstore.compact`). `nx gc` runs this sequence and waits for
+Nexus for each format in use), and then **Admin - Compact blob store** (`blobstore.compact`). `nexr gc` runs this sequence and waits for
 it.
 
-**FR-GC-1 (M), discovery.** `nx` lists tasks (`GET /v1/tasks`) and selects Docker GC tasks, then
+**FR-GC-1 (M), discovery.** `nexr` lists tasks (`GET /v1/tasks`) and selects Docker GC tasks, then
 asset blob cleanup tasks (S; only where the server has them), then compaction tasks. `--task`
 (repeatable, task ID or exact name) or the `gc.tasks` config key pin an explicit list and order.
 
@@ -903,10 +903,10 @@ asset blob cleanup tasks (S; only where the server has them), then compaction ta
 Where properties are not exposed, all tasks of each type are run and a warning is printed, unless
 `--task` is used.
 
-**FR-GC-3 (S).** If no suitable task exists, `nx` fails with exit code 5 and explains how to create
-the tasks. `nx` never creates tasks unless asked (Q10). With `--create-missing`, on servers that
-support the task creation API, `nx` creates
-manual tasks named `nx: Docker GC <repo>` and `nx: Compact <blobstore>`, using the defaults from the
+**FR-GC-3 (S).** If no suitable task exists, `nexr` fails with exit code 5 and explains how to create
+the tasks. `nexr` never creates tasks unless asked (Q10). With `--create-missing`, on servers that
+support the task creation API, `nexr` creates
+manual tasks named `nexr: Docker GC <repo>` and `nexr: Compact <blobstore>`, using the defaults from the
 server's task templates.
 
 **FR-GC-4 (M), execution.** Tasks run sequentially, in the order of FR-GC-1. For each task:
@@ -918,27 +918,27 @@ server's task templates.
    seen before the trigger.
 4. Check that `lastRunResult` is `OK`.
 
-`--wait-timeout` (default 1h) limits the wait for each task. When it expires, `nx` reports the task as
+`--wait-timeout` (default 1h) limits the wait for each task. When it expires, `nexr` reports the task as
 still running and exits with code 8; the task keeps running on the server.
 
-**FR-GC-5 (M).** `--no-wait` triggers all selected tasks and returns at once. `nx` warns that
+**FR-GC-5 (M).** `--no-wait` triggers all selected tasks and returns at once. `nexr` warns that
 compaction started this way may not reclaim space released by a GC that is still running.
 
 **FR-GC-6 (M).** The Docker GC task does not delete data deployed within its *deploy offset* (24 hours
-by default). `nx` shows the configured offset when the server exposes it.
+by default). `nexr` shows the configured offset when the server exposes it.
 
 **FR-GC-7 (M).** `--dry-run` shows the selected tasks in execution order without running them.
 
 **FR-GC-8 (M).** The server may release some storage only later: for example, on 3.96 the blobs of
 deleted raw files were not released by an immediate run of the cleanup tasks (see
-[nexus-api.md](nexus-api.md#storage-reclamation)). `nx gc` reports the blob store sizes before and
+[nexus-api.md](nexus-api.md#storage-reclamation)). `nexr gc` reports the blob store sizes before and
 after the run when the user may read them, and its help text explains that disk usage can drop only
 after later scheduled runs.
 
 ```
-$ nx gc --repo docker-hosted
+$ nexr gc --repo docker-hosted
 TASK                                    TYPE                  RESULT  DURATION
-nx: Docker GC docker-hosted             repository.docker.gc  OK      1m12s
+nexr: Docker GC docker-hosted           repository.docker.gc  OK      1m12s
 Cleanup unused docker blobs from nexus  assetBlob.cleanup     OK      3s
 Compact default blob store              blobstore.compact     OK      4m03s
 blob store default: 65.6 MiB -> 32.9 MiB (355 -> 230 blobs)
@@ -948,30 +948,30 @@ JSON: `{"tasks": [{"id", "name", "type", "result", "started", "finished", "durat
 "blob_stores": [{"name", "blob_count_before", "size_before", "blob_count_after", "size_after"}]}`.
 `blob_stores` is empty when the user may not read blob store metrics.
 
-### 6.10 `nx tasks`
+### 6.10 `nexr tasks`
 
 ```
-nx tasks [ls] [--type TYPE]
-nx tasks show TASK
-nx tasks run TASK [--wait] [--wait-timeout DURATION]
-nx tasks stop TASK
+nexr tasks [ls] [--type TYPE]
+nexr tasks show TASK
+nexr tasks run TASK [--wait] [--wait-timeout DURATION]
+nexr tasks stop TASK
 ```
 
 **FR-TASKS-1 (S).** `TASK` is a task ID or an exact task name. An ambiguous name is an error that lists
 the matching IDs. Listing columns: `ID`, `NAME`, `TYPE`, `STATE`, `LAST RESULT`, `LAST RUN`,
 `NEXT RUN`. `show` also prints schedule and properties when the server exposes them.
 
-**FR-TASKS-2 (S).** `run --wait` uses the same wait algorithm as `nx gc` (FR-GC-4). Triggering a
+**FR-TASKS-2 (S).** `run --wait` uses the same wait algorithm as `nexr gc` (FR-GC-4). Triggering a
 task that is already running is reported as such. Nexus answers such a request with HTTP 500, so
-`nx` checks the task state first.
+`nexr` checks the task state first.
 
-**FR-TASKS-3 (C).** `nx tasks create` and `nx tasks rm` are planned for servers that support the task
+**FR-TASKS-3 (C).** `nexr tasks create` and `nexr tasks rm` are planned for servers that support the task
 creation API.
 
-### 6.11 `nx api`
+### 6.11 `nexr api`
 
 ```
-nx api PATH [-X|--method METHOD] [-H|--header 'Name: value']...
+nexr api PATH [-X|--method METHOD] [-H|--header 'Name: value']...
             [-d|--data DATA|@FILE|@-] [--paginate] [-i|--include]
 ```
 
@@ -979,7 +979,7 @@ nx api PATH [-X|--method METHOD] [-H|--header 'Name: value']...
 prints the response body to stdout. JSON is pretty-printed when stdout is a TTY.
 
 * `PATH` starting with `/service/` or `/repository/` is relative to the base URL; any other path is
-  relative to `<base>/service/rest` (e.g. `nx api /v1/blobstores`).
+  relative to `<base>/service/rest` (e.g. `nexr api /v1/blobstores`).
 * The method defaults to `GET`, or `POST` when `--data` is given. JSON bodies get
   `Content-Type: application/json` unless a header overrides it.
 * `--paginate` follows `continuationToken` pages of `GET` responses and prints one merged JSON array
@@ -989,7 +989,7 @@ prints the response body to stdout. JSON is pretty-printed when stdout is a TTY.
 * Credentials are only sent to the configured host; absolute URLs pointing to another host are
   rejected.
 
-### 6.12 `nx status`
+### 6.12 `nexr status`
 
 **FR-STATUS-1 (S).** Checks and prints the effective URL, the profile and where it came from, the
 server version and edition (from the `Server` header), read availability (`GET /v1/status`), write
@@ -999,23 +999,23 @@ Exit codes: 0 when the server is reachable and the credentials (if any) are acce
 server is unreachable; 4 when the credentials are rejected; 1 when the server reports that it is
 unavailable.
 
-### 6.13 `nx config`
+### 6.13 `nexr config`
 
 **FR-CONFIGCMD-1 (S).**
 
-* `nx config view` prints the effective settings, each annotated with its source (flag, env,
+* `nexr config view` prints the effective settings, each annotated with its source (flag, env,
   profile, file, default). Secrets are always redacted.
-* `nx config path` prints the config file in use and says whether it exists.
-* `nx config profiles` lists the profiles and marks the active one.
+* `nexr config path` prints the config file in use and says whether it exists.
+* `nexr config profiles` lists the profiles and marks the active one.
 
-**FR-CONFIGCMD-2 (C).** `nx config use PROFILE` sets `current_profile` in the config file.
+**FR-CONFIGCMD-2 (C).** `nexr config use PROFILE` sets `current_profile` in the config file.
 
-### 6.14 `nx version` and `nx completion`
+### 6.14 `nexr version` and `nexr completion`
 
-**FR-VERSION-1 (M).** `nx version` (and `nx --version`) prints the version, commit, build date, Go
+**FR-VERSION-1 (M).** `nexr version` (and `nexr --version`) prints the version, commit, build date, Go
 version and OS/architecture. `--json` is supported.
 
-**FR-COMPLETION-1 (M).** `nx completion bash|zsh|fish|powershell` prints a shell completion script.
+**FR-COMPLETION-1 (M).** `nexr completion bash|zsh|fish|powershell` prints a shell completion script.
 
 **FR-COMPLETION-2 (S).** Completion is dynamic for repository names, profile names and image names:
 it queries the server with a short timeout and fails silently.
@@ -1028,8 +1028,8 @@ it queries the server with a short timeout and fails silently.
 
 | Flag | Environment | Config key | Default | Meaning |
 |---|---|---|---|---|
-| `--profile NAME` | `NX_PROFILE` | `current_profile` | none | Profile to use |
-| `--config PATH` | `NX_CONFIG` | n/a | OS default | Config file |
+| `--profile NAME` | `NEXR_PROFILE` | `current_profile` | none | Profile to use |
+| `--config PATH` | `NEXR_CONFIG` | n/a | OS default | Config file |
 | `--url URL` | `NEXUS_URL` | `url` | none | Base URL |
 | `-u, --user NAME` | `NEXUS_USER` | `user` | none | User name / token name code |
 | `--password VALUE` | `NEXUS_PASSWORD` | `password` | none | Password (discouraged on the command line) |
@@ -1086,11 +1086,11 @@ neither `-q` nor `--json` is set. It is redrawn at most 10 times per second.
 
 ### 7.3 Error messages
 
-**FR-ERR-1 (M).** An error is printed as `nx: <message>`, optionally followed by `hint: <text>` lines,
+**FR-ERR-1 (M).** An error is printed as `nexr: <message>`, optionally followed by `hint: <text>` lines,
 e.g.:
 
 ```
-nx: repository "raw-relases" not found
+nexr: repository "raw-relases" not found
 hint: available raw repositories: raw-releases, raw-snapshots
 ```
 
@@ -1135,7 +1135,7 @@ code is used. If the failures have different categories, or some items succeeded
   install and upgrade with `brew`.
 * **NFR-BUILD-5 (C).** Planned after v1.0: signed checksums (cosign), SBOM, Scoop bucket, `.deb`/`.rpm`
   packages and a container image.
-* **NFR-BUILD-6 (S).** Binary size ≤ 15 MB. `nx version` starts in ≤ 50 ms.
+* **NFR-BUILD-6 (S).** Binary size ≤ 15 MB. `nexr version` starts in ≤ 50 ms.
 
 ### 8.2 Dependencies
 
@@ -1163,16 +1163,16 @@ code is used. If the failures have different categories, or some items succeeded
 * **NFR-REL-2 (M), timeouts.** Connect: 10 s. TLS handshake: 10 s. API requests: `--timeout` (60 s).
   File transfers have no total timeout, but fail when no data flows for 5 minutes.
 * **NFR-REL-3 (M), cancellation.** On SIGINT, in-flight operations stop within 2 s, temporary files are
-  removed, a partial summary is printed, and `nx` exits with 130. A second SIGINT exits immediately.
+  removed, a partial summary is printed, and `nexr` exits with 130. A second SIGINT exits immediately.
 * **NFR-REL-4 (M).** Downloads are atomic and verified (FR-DOWN-3, FR-DOWN-4).
 
 ### 8.5 Security
 
 * **NFR-SEC-1 (M).** TLS certificate verification is on by default, with TLS 1.2 as the minimum
   version. `--insecure` prints a warning on every run.
-* **NFR-SEC-2 (M).** Secrets never appear in output, logs, error messages or `nx config view`.
+* **NFR-SEC-2 (M).** Secrets never appear in output, logs, error messages or `nexr config view`.
 * **NFR-SEC-3 (M).** Credentials are not forwarded on redirects to other hosts, and never sent to hosts
-  other than the configured one (`nx api`).
+  other than the configured one (`nexr api`).
 * **NFR-SEC-4 (M).** Path traversal protection for downloads (FR-DOWN-5). No implicit per-directory
   configuration (FR-CFG-3).
 * **NFR-SEC-5 (M).** No telemetry of any kind.
@@ -1210,19 +1210,19 @@ name, e.g. `nx-repository-view-raw-raw-releases-read`.
 
 | Command | Privileges |
 |---|---|
-| `nx repos` | none specific; only repositories with *browse* permission are listed |
-| `nx ls` | `nx-repository-view-<fmt>-<repo>-browse` |
-| `nx up` (`put`) | `…-add` (new files), `…-edit` (overwrite) |
-| `nx up --method components` | `…-add`, `…-edit`, `…-read`, `…-browse` |
-| `nx down` | `…-read` (plus `…-browse` for directories) |
-| `nx rm` (raw) | `…-delete` (plus `…-browse` for directories) |
-| `nx rm` (other formats, asset API) | `…-browse`, `…-delete` |
-| `nx rm --server-side` | more than `browse`/`read`/`delete` (403 observed with those); exact privilege to be confirmed |
-| `nx docker ls`, `nx docker tags` | `nx-repository-view-<fmt>-<repo>-browse` (and `-read`), where `<fmt>` is `docker` or `oci` |
-| `nx docker rm` | `…-browse`, `…-delete` |
-| `nx tasks`, `nx gc` | `nx-tasks-read`, `nx-tasks-run` (plus the task create privilege for `--create-missing`, repository admin read for blob store lookup) |
-| `nx status` | none (status endpoints allow anonymous access) |
-| `nx api` | depends on the endpoint |
+| `nexr repos` | none specific; only repositories with *browse* permission are listed |
+| `nexr ls` | `nx-repository-view-<fmt>-<repo>-browse` |
+| `nexr up` (`put`) | `…-add` (new files), `…-edit` (overwrite) |
+| `nexr up --method components` | `…-add`, `…-edit`, `…-read`, `…-browse` |
+| `nexr down` | `…-read` (plus `…-browse` for directories) |
+| `nexr rm` (raw) | `…-delete` (plus `…-browse` for directories) |
+| `nexr rm` (other formats, asset API) | `…-browse`, `…-delete` |
+| `nexr rm --server-side` | more than `browse`/`read`/`delete` (403 observed with those); exact privilege to be confirmed |
+| `nexr docker ls`, `nexr docker tags` | `nx-repository-view-<fmt>-<repo>-browse` (and `-read`), where `<fmt>` is `docker` or `oci` |
+| `nexr docker rm` | `…-browse`, `…-delete` |
+| `nexr tasks`, `nexr gc` | `nx-tasks-read`, `nx-tasks-run` (plus the task create privilege for `--create-missing`, repository admin read for blob store lookup) |
+| `nexr status` | none (status endpoints allow anonymous access) |
+| `nexr api` | depends on the endpoint |
 
 The README MUST include example role definitions for a CI uploader, a read-only consumer and a
 cleanup operator.
@@ -1233,17 +1233,17 @@ cleanup operator.
 
 | ID | Criterion | Milestone |
 |---|---|---|
-| AC-1 | `nx version` runs on all release platforms (verified in CI by building all targets and running the Linux, macOS and Windows binaries). | M0 |
+| AC-1 | `nexr version` runs on all release platforms (verified in CI by building all targets and running the Linux, macOS and Windows binaries). | M0 |
 | AC-2 | Configuration precedence and credential scoping pass a table-driven test suite that covers every row of §5.1. | M0 |
-| AC-3 | `nx repos --json` against the latest Nexus release returns the expected repositories; `nx status` detects version and authentication state. | M0 |
+| AC-3 | `nexr repos --json` against the latest Nexus release returns the expected repositories; `nexr status` detects version and authentication state. | M0 |
 | AC-4 | Uploading a 1 GiB file keeps resident memory below 64 MiB; round trips `up` → `down` preserve content (checksums) and directory layout, including names with spaces and non-ASCII characters. | M1 |
 | AC-5 | A directory of 1,000 files uploads with `--concurrency 8`; injected server failures (500/503) are retried; permanent failures are reported with exit code 6. | M1 |
 | AC-6 | `rm -r --dry-run` lists exactly the files that `rm -r` then deletes; bulk deletion without `--yes` in a non-interactive shell deletes nothing and exits with 2. | M1 |
 | AC-7 | Remote paths containing `..`, absolute paths or Windows-reserved names never cause writes outside `DEST`. | M1 |
-| AC-8 | `nx docker tags` shows correct digests and push times for images pushed with `docker push` and for multi-arch indexes copied with `crane`. | M2 |
-| AC-9 | `--keep N` keeps the N newest non-protected tags; `latest` is protected by default; deleting a tag leaves other tags with the same digest intact; multi-arch images stay pullable after deletions of other tags plus `nx gc`. | M2 |
-| AC-10 | `nx gc` runs Docker GC, asset blob cleanup (where present) and compaction in this order, waits for each, reports their results, handles a task that is already running, and exits with 8 on timeout. | M3 |
-| AC-11 | Every command passes the end-to-end suite against 3.71: listing falls back to search and scan without the Browse API, `nx gc` works without task properties and without the task creation API, and registry pagination works despite the 3.71 `Link` header. | M4 |
+| AC-8 | `nexr docker tags` shows correct digests and push times for images pushed with `docker push` and for multi-arch indexes copied with `crane`. | M2 |
+| AC-9 | `--keep N` keeps the N newest non-protected tags; `latest` is protected by default; deleting a tag leaves other tags with the same digest intact; multi-arch images stay pullable after deletions of other tags plus `nexr gc`. | M2 |
+| AC-10 | `nexr gc` runs Docker GC, asset blob cleanup (where present) and compaction in this order, waits for each, reports their results, handles a task that is already running, and exits with 8 on timeout. | M3 |
+| AC-11 | Every command passes the end-to-end suite against 3.71: listing falls back to search and scan without the Browse API, `nexr gc` works without task properties and without the task creation API, and registry pagination works despite the 3.71 `Link` header. | M4 |
 | AC-12 | The end-to-end suite passes against the latest Nexus release and 3.71; GoReleaser publishes the release artifacts and updates the Homebrew tap; README and command help are complete. | M5 |
 
 ---
@@ -1257,7 +1257,7 @@ cleanup operator.
 * **A-2.** The REST API (`/service/rest`) and repository content (`/repository/`) are reachable under
   the same base URL.
 * **A-3.** Nexus tasks for Docker GC and compaction are either present or may be created by an
-  administrator (or by `nx gc --create-missing` where supported).
+  administrator (or by `nexr gc --create-missing` where supported).
 * **A-4.** Clock skew between client and server is small compared to retention durations
   (`--older-than` is evaluated against server timestamps using the client clock).
 
@@ -1270,38 +1270,22 @@ cleanup operator.
 | Q3 | TLS | `--ca-cert` and `--insecure`; mutual TLS (client certificates) as an optional setting for servers that require it. | §5.3, §7.1 |
 | Q4 | Order of "keep the last N tags" | Push date. `--sort semver` and `--sort name` are options. `latest` stays protected by default and can be unprotected through `docker.exclude`. | FR-DRM-2, FR-DRM-3 |
 | Q5 | Raw upload method | HTTP `PUT` by default; Components API with `--method components`. | FR-UP-4, ADR-003 |
+| Q6 | Name of the tool | `nexr`, short for **Nex**us **R**epository. The working name `nx` was dropped because it clashes with the Nx build system and with another Nexus CLI that installs a binary named `nx` ([addozhang/nexus-cli](https://github.com/addozhang/nexus-cli)). No conflicts for `nexr` were found on npm, PyPI, crates.io, homebrew-core or in a web search (2026-09-26). | whole document |
 | Q7 | Profiles for several Nexus instances | Included in v1.0. | §5.4 |
 | Q8 | Next formats and admin features | Maven and Helm upload, then repository management. | [roadmap.md](roadmap.md) |
 | Q9 | Distribution | GitHub Releases and a Homebrew tap in v1.0; Scoop, `.deb`/`.rpm`, container image and signing later. | NFR-BUILD-2, NFR-BUILD-4, NFR-BUILD-5 |
-| Q10 | Creating server tasks | Only with `nx gc --create-missing`; never by default. | FR-GC-3 |
+| Q10 | Creating server tasks | Only with `nexr gc --create-missing`; never by default. | FR-GC-3 |
 
 ### 11.3 Open questions
 
-**Q6: name of the tool.** `nx` clashes with the Nx build system (`nx` on npm) and with another Nexus
-CLI that installs a binary named `nx` ([addozhang/nexus-cli](https://github.com/addozhang/nexus-cli)).
-Candidates, checked on 2026-09-26 against npm, PyPI, crates.io, homebrew-core and a web search:
-
-| Name | Idea | Conflicts found |
-|---|---|---|
-| `nexr` | **Nex**us **R**epository | none |
-| `nx3` | Nexus 3; closest to the current name | none, but it still reads like "Nx" |
-| `nexum` | Latin *nexum*, "bond"; same root as *nexus* | small unrelated libraries on npm, PyPI and crates.io; no CLI |
-| `nexly` | short and playful | none |
-
-Rejected because the name is already used by a CLI: `nexctl` (Nexodus), `nxctl` (another "Nexus"
-CLI), `nxc` (NetExec), `nxus` (the Nxus framework), `nyx` (a release tool), and `nexus-cli` and
-`nexusctl` (used by several Nexus-related projects and packages).
-
-Until Q6 is decided, these documents use `nx` as the working name. Renaming affects the binary name,
-the Go module path, the GitHub repository name, the Homebrew tap and the documentation, so it should
-be decided before v0.1.0.
+None at the moment.
 
 ---
 
 ## Appendix A: Complete configuration example
 
 ```yaml
-# ~/.config/nx/config.yaml
+# ~/.config/nexr/config.yaml
 current_profile: prod
 
 # Top-level defaults, inherited by all profiles
@@ -1332,11 +1316,11 @@ profiles:
   staging:
     url: https://staging.example.com/nexus
     user: alice
-    password_file: ~/.config/nx/staging.secret
+    password_file: ~/.config/nexr/staging.secret
     tls:
       ca_file: /etc/ssl/certs/corp-root-ca.pem
-      client_cert: ~/.config/nx/staging-client.pem   # only if the server requires mutual TLS
-      client_key: ~/.config/nx/staging-client.key
+      client_cert: ~/.config/nexr/staging-client.pem   # only if the server requires mutual TLS
+      client_key: ~/.config/nexr/staging-client.key
 
   lab:
     url: https://nexus.lab.local
@@ -1348,40 +1332,40 @@ profiles:
 
 ```sh
 # Connection check and configuration
-nx status
-nx config view
-nx --profile staging repos
+nexr status
+nexr config view
+nexr --profile staging repos
 
 # Repositories
-nx repos --format raw
-nx repos show docker-hosted
+nexr repos --format raw
+nexr repos show docker-hosted
 
 # Files (raw)
-nx ls raw-releases/myapp/
-nx ls -rl raw-releases/myapp/1.4.0/
-nx up ./dist raw-releases/myapp/1.4.0/
-nx up ./report.pdf raw-releases/docs/report-2026-09.pdf
-tar czf - ./site | nx up - raw-releases/backups/site.tgz
-nx down raw-releases/myapp/1.4.0/ ./release/
-nx down raw-releases/myapp/1.4.0/myapp.tar.gz - | tar xz
-nx rm raw-releases/myapp/1.4.0/checksums.txt
-nx rm -r raw-releases/myapp/1.0.0/ --dry-run
+nexr ls raw-releases/myapp/
+nexr ls -rl raw-releases/myapp/1.4.0/
+nexr up ./dist raw-releases/myapp/1.4.0/
+nexr up ./report.pdf raw-releases/docs/report-2026-09.pdf
+tar czf - ./site | nexr up - raw-releases/backups/site.tgz
+nexr down raw-releases/myapp/1.4.0/ ./release/
+nexr down raw-releases/myapp/1.4.0/myapp.tar.gz - | tar xz
+nexr rm raw-releases/myapp/1.4.0/checksums.txt
+nexr rm -r raw-releases/myapp/1.0.0/ --dry-run
 
 # Docker / OCI
-nx docker ls -R docker-hosted
-nx docker ls -R docker-hosted --registry-url https://registry.example.com
-nx docker tags team/app
-nx docker tags registry.example.com/team/app      # host resolved through docker.registry_urls
-nx docker rm team/app:1.0 team/app:1.1
-nx docker rm team/app --keep 10 --older-than 30d --dry-run
-nx docker rm team/app --keep 10 --exclude 're:^v\d+\.\d+\.\d+$' --yes
+nexr docker ls -R docker-hosted
+nexr docker ls -R docker-hosted --registry-url https://registry.example.com
+nexr docker tags team/app
+nexr docker tags registry.example.com/team/app      # host resolved through docker.registry_urls
+nexr docker rm team/app:1.0 team/app:1.1
+nexr docker rm team/app --keep 10 --older-than 30d --dry-run
+nexr docker rm team/app --keep 10 --exclude 're:^v\d+\.\d+\.\d+$' --yes
 
 # Storage reclamation and tasks
-nx gc --repo docker-hosted
-nx tasks
-nx tasks run "Compact default blob store" --wait
+nexr gc --repo docker-hosted
+nexr tasks
+nexr tasks run "Compact default blob store" --wait
 
 # Everything else
-nx api /v1/blobstores
-nx api '/v1/components?repository=raw-releases' --paginate
+nexr api /v1/blobstores
+nexr api '/v1/components?repository=raw-releases' --paginate
 ```

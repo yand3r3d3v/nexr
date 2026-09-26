@@ -7,13 +7,13 @@
 | **Verified against** | Nexus Repository **3.96.3-01 CE** (latest release) and **3.71.0-06 OSS** (oldest supported release), both on H2, in fresh `sonatype/nexus3` containers |
 | **Related documents** | [Specification](specification.md) · [Architecture](architecture.md) |
 
-This page records how the Nexus APIs used by `nx` actually behave. It comes from experiments with
+This page records how the Nexus APIs used by `nexr` actually behave. It comes from experiments with
 real servers, not only from the documentation. Unless stated otherwise, the observations were made on
 **3.96.3**. Differences in **3.71.0** are marked **(3.71)**, and features that exist only in newer
 releases are marked **(3.96)**. Statements taken from documentation alone are marked
 *(not verified)*.
 
-Releases up to 3.70 (OrientDB) are not supported by `nx`. A few of their differences are noted
+Releases up to 3.70 (OrientDB) are not supported by `nexr`. A few of their differences are noted
 because older articles and scripts rely on them.
 
 The full OpenAPI definition of a running server is available at `<base>/service/rest/swagger.json`.
@@ -49,7 +49,7 @@ It is OpenAPI 3.0 on 3.96 and Swagger 2.0 on 3.71.
 | REST API | `<base>/service/rest/v1/…` (a few endpoints under `/beta/` and `/internal/`) | repositories, components, assets, search, browse, tasks, status |
 | Repository content | `<base>/repository/<repo>/<path>` | download, upload (`PUT`), delete for raw and other path-based formats |
 | Docker Registry v2 | `<base>/repository/<repo>/v2/…` | image catalog, tags, manifests |
-| Docker connectors | `http(s)://<host>:<port>/v2/…`, sub-domain, or `<base>/v2/<repo>/…` with `pathEnabled` **(3.96)** | Docker clients; `nx` does not need them, but can use one (spec FR-NET-3) |
+| Docker connectors | `http(s)://<host>:<port>/v2/…`, sub-domain, or `<base>/v2/<repo>/…` with `pathEnabled` **(3.96)** | Docker clients; `nexr` does not need them, but can use one (spec FR-NET-3) |
 
 `<base>` may include a context path (e.g. `https://example.com/nexus`).
 
@@ -236,7 +236,7 @@ OrientDB releases (≤ 3.70) stored `name` and `path` without the leading slash 
 
 ## Search
 
-`GET /v1/search` (components) and `GET /v1/search/assets` (assets). Parameters relevant to `nx`:
+`GET /v1/search` (components) and `GET /v1/search/assets` (assets). Parameters relevant to `nexr`:
 `repository`, `format`, `group`, `name`, `version`, `q`, `sort`, `direction`, `continuationToken`,
 `docker.imageName`, `docker.imageTag`, `docker.contentDigest`, `raw.name` **(3.96)**,
 `oci.imageName`/`oci.imageTag` **(3.96)**. `GET /v1/search/versions` **(3.96)** lists the distinct
@@ -266,7 +266,7 @@ Observed raw queries (files under `dir/`, `dir-sibling/`, `other/dir/`):
 | `raw.name=c.txt` **(3.96)** | files with that base name |
 | `q=sub` | keyword search over tokens; also matches `/other/dir/sub-x.txt` |
 
-**Conclusion for `nx`:** use the `group` parameter. Use a quoted exact `group` for one directory, and
+**Conclusion for `nexr`:** use the `group` parameter. Use a quoted exact `group` for one directory, and
 an unquoted `group=<dir>*` for recursive listing, but only when the value has at least 3 characters
 and contains no whitespace or quotes. Always filter results by exact path prefix on the client.
 
@@ -280,7 +280,7 @@ immediately. Deletions disappeared from search immediately.
 
 `sort` accepts `group`, `name`, `version` and `repository`; `direction` accepts `asc` and `desc`
 (version defaults to `desc`). `sort=version` orders lexically (`latest`, `1.1`, `1.0`), which is not
-useful for SemVer, so `nx` sorts on the client.
+useful for SemVer, so `nexr` sorts on the client.
 
 ## Browse API
 
@@ -380,7 +380,7 @@ Following it literally gives `404`. Re-issuing `?n=1&last=multi%2Falpine` agains
 reverse proxy, the host in the `Link` URL may also differ from the one the client used. Clients should
 therefore read `n` and `last` from the header and build the next request themselves.
 
-`nx` deletes tags through `DELETE /v1/components/{id}` instead of the Registry API (precise,
+`nexr` deletes tags through `DELETE /v1/components/{id}` instead of the Registry API (precise,
 documented REST API).
 
 With `pathEnabled: true` **(3.96)**, Docker clients use `<host>/<repo>/<image>:<tag>` and the
@@ -431,7 +431,7 @@ Creating a manual task (3.96):
 POST /v1/tasks
 {
   "type": "repository.docker.gc",
-  "name": "nx: Docker GC docker-hosted",
+  "name": "nexr: Docker GC docker-hosted",
   "enabled": true,
   "notificationCondition": "FAILURE",
   "frequency": {"schedule": "manual"},
@@ -441,7 +441,7 @@ POST /v1/tasks
 ```
 
 Fresh 3.71 and 3.96 servers have **no** Docker GC or compaction task, so an administrator (or
-`nx gc --create-missing` on 3.96) has to create them.
+`nexr gc --create-missing` on 3.96) has to create them.
 
 ### Storage reclamation
 
@@ -492,7 +492,7 @@ Deletion:
 ## Version differences
 
 Between the oldest supported and the latest release. Releases in between may have any mix of these
-features, so `nx` detects them at run time.
+features, so `nexr` detects them at run time.
 
 | Area | 3.71.0 | 3.96.3 |
 |---|---|---|

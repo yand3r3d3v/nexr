@@ -1,6 +1,6 @@
-# nx design documentation
+# nexr design documentation
 
-These documents describe `nx`, a command-line tool for Sonatype Nexus Repository 3, before
+These documents describe `nexr`, a command-line tool for Sonatype Nexus Repository 3, before
 implementation starts. They are drafts; the decisions from the first review and the remaining open questions
 are listed in [specification.md §11](specification.md#11-assumptions-decisions-and-open-questions).
 
