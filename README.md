@@ -7,10 +7,10 @@ A command-line tool for
 with repositories, files, container images and storage cleanup from a terminal or a CI job, without
 the web UI.
 
-> **Status: early development.** The foundation (milestone M0) is done: configuration and profiles,
-> `nexr status`, `nexr repos` and `nexr config`. Raw files, Docker images and cleanup follow in the
-> next milestones; see the [roadmap](docs/roadmap.md). Until v1.0, commands and JSON output may still
-> change.
+> **Status: early development.** Milestones M0 and M1 are done: configuration and profiles,
+> `nexr status`, `nexr repos`, `nexr config`, and the file commands `ls`, `up`, `down` and `rm` for
+> raw repositories. Docker images and cleanup follow in the next milestones; see the
+> [roadmap](docs/roadmap.md). Until v1.0, commands and JSON output may still change.
 
 * One static binary for Linux, macOS and Windows (amd64 and arm64). Nothing else to install.
 * Nexus Repository 3.71 and newer. The latest release (3.96) is supported first; older releases
@@ -82,6 +82,38 @@ maven-public
 Storage, cleanup and Docker settings in `repos show` need a user who may read the repository
 configuration (an administrative privilege); other users see the basic fields.
 
+Work with files in raw repositories:
+
+```console
+$ nexr up ./dist raw-releases/myapp/1.4.0/
+uploaded  raw-releases/myapp/1.4.0/myapp.tar.gz  (48.2 MiB)
+uploaded  raw-releases/myapp/1.4.0/checksums.txt  (312 B)
+2 files, 48.2 MiB uploaded in 3.1s
+
+$ nexr ls -l raw-releases/myapp/
+         -  -                 1.3.0/
+         -  -                 1.4.0/
+   1.2 KiB  2026-09-20 14:03  README.md
+
+$ nexr down raw-releases/myapp/1.4.0/ ./release
+$ nexr down raw-releases/myapp/config.json - | jq .version
+$ nexr rm -r raw-releases/myapp/1.3.0/ --dry-run
+```
+
+* `nexr up DIR REPO/PATH/` uploads the *contents* of `DIR` below `PATH/` (like
+  `aws s3 cp --recursive`), so `nexr down REPO/PATH/ DIR` is its exact inverse. `nexr up - REPO/FILE`
+  uploads stdin.
+* Transfers run in parallel (`--concurrency`, default 4), are retried after network errors and 5xx
+  responses, and stream files without holding them in memory. Downloads are verified against the
+  checksums from Nexus and written atomically.
+* `--include` and `--exclude` use `.gitignore` rules: `--exclude '*.log'` skips `.log` files at any
+  depth, `--exclude node_modules` skips every such directory.
+* `nexr rm` asks before deleting more than one file (or needs `--yes` in scripts); `--dry-run` shows
+  what would be deleted.
+* **Listings can lag behind uploads.** Nexus updates its search and browse indexes a few seconds
+  after an upload, so a file uploaded in the last seconds may be missing from `ls`, or from
+  `down`/`rm -r` of a directory.
+
 ## Commands
 
 | Command | Description |
@@ -89,15 +121,19 @@ configuration (an administrative privilege); other users see the basic fields.
 | `nexr status` | Check the connection: URL, server version and edition, read/write availability, credentials. |
 | `nexr repos [ls]` | List repositories; filter with `--format`, `--type` and `--match` (glob or `re:REGEX`). |
 | `nexr repos show REPO` | Show repository details. |
+| `nexr ls REPO[/PATH]` | List files and directories (`-r` recursive, `-l` sizes and times, `--sort`). |
+| `nexr up SRC... REPO[/PATH]` | Upload files and directory trees to a hosted raw repository (`--dry-run`, `--skip-existing`, `--verify`). |
+| `nexr down REPO/PATH [DEST]` | Download a file or a directory tree; `-` writes a file to stdout. |
+| `nexr rm REPO/PATH...` | Delete files, or directories with `-r` (`--dry-run`, `--yes`, `--ignore-missing`). |
 | `nexr config view` | Show the effective settings and where each comes from. Passwords are always redacted. |
 | `nexr config path` | Print the location of the config file. |
 | `nexr config profiles` | List the profiles of the config file. |
 | `nexr version` | Print version information (`--json` supported). |
 | `nexr completion SHELL` | Print a completion script for bash, zsh, fish or PowerShell. |
 
-Planned: `nexr ls`, `up`, `down` and `rm` for raw repositories; `nexr docker ls`, `tags` and `rm` with
-retention rules (`--keep N`, `--older-than`); `nexr gc` and `nexr tasks` for cleanup tasks; `nexr api`
-for any REST call. The [specification](docs/specification.md) describes them in detail.
+Planned: `nexr docker ls`, `tags` and `rm` with retention rules (`--keep N`, `--older-than`);
+`nexr gc` and `nexr tasks` for cleanup tasks; `nexr api` for any REST call. The
+[specification](docs/specification.md) describes them in detail.
 
 Global flags work with every command:
 
@@ -201,7 +237,7 @@ JSON document, and failures write an error object to stderr:
 
 ## Shell completion
 
-Completion includes repository and profile names.
+Completion includes repository names, remote paths and profile names.
 
 ```sh
 # bash

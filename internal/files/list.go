@@ -99,7 +99,7 @@ func SortEntries(entries []Entry) {
 func (s *Service) fillMeta(ctx context.Context, repo nexus.Repository, dir string, files []Entry) error {
 	if strings.EqualFold(repo.Format, "raw") {
 		byPath := map[string]nexus.Asset{}
-		for a, err := range s.api.SearchAssets(ctx, nexus.AssetQuery{Repository: repo.Name, Group: nexus.QuoteGroup(dir)}) {
+		for a, err := range s.api.SearchAssets(ctx, nexus.AssetQuery{Repository: repo.Name, Group: nexus.QuotePath(dir)}) {
 			if err != nil {
 				if errs.Classify(err) == errs.KindRejected {
 					break // fall back to HEAD requests
@@ -253,24 +253,17 @@ func (s *Service) StatFile(ctx context.Context, repo nexus.Repository, path stri
 	if err != nil {
 		return Entry{}, false, err
 	}
-	files := []Entry{statEntry(repo.Name, path, info, s.api.ContentURL(repo.Name, path))}
+	e = statEntry(repo.Name, path, info, s.api.ContentURL(repo.Name, path))
 	if strings.EqualFold(repo.Format, "raw") {
 		// Complete checksums, uploader and asset ID from the search index.
-		parent := ""
-		if i := strings.LastIndex(path, "/"); i >= 0 {
-			parent = path[:i]
-		}
-		for a, err := range s.api.SearchAssets(ctx, nexus.AssetQuery{Repository: repo.Name, Group: nexus.QuoteGroup(parent)}) {
-			if err != nil {
-				break // the HEAD metadata is enough
+		for a, err := range s.api.SearchAssets(ctx, nexus.AssetQuery{Repository: repo.Name, Name: nexus.QuotePath(path)}) {
+			if err == nil && a.Path == path {
+				e = assetEntry(a)
 			}
-			if a.Path == path {
-				files[0] = assetEntry(a)
-				break
-			}
+			break // the HEAD metadata is enough otherwise
 		}
 	}
-	return files[0], true, nil
+	return e, true, nil
 }
 
 // DirExists reports whether there are entries below dir.

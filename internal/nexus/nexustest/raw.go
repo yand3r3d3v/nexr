@@ -312,22 +312,27 @@ func (s *Server) searchAssets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, []map[string]string{{"id": "repository", "message": "Unable to locate repository with name " + repo}})
 		return
 	}
-	match, err := groupMatcher(q.Get("group"))
+	matchGroup, err := groupMatcher(q.Get("group"))
+	if err != "" {
+		writeJSON(w, http.StatusBadRequest, []map[string]string{{"id": "*", "message": err}})
+		return
+	}
+	matchName, err := groupMatcher(q.Get("name"))
 	if err != "" {
 		writeJSON(w, http.StatusBadRequest, []map[string]string{{"id": "*", "message": err}})
 		return
 	}
 	var items []map[string]any
 	for _, f := range s.sortedFiles(repo) {
-		if match(f.group()) {
+		if matchGroup(f.group()) && matchName("/"+f.path) {
 			items = append(items, s.assetJSON(repo, f))
 		}
 	}
 	s.page(w, r, items, 50)
 }
 
-// groupMatcher reproduces the matching of the group search parameter on 3.96
-// (docs/nexus-api.md, "Matching rules").
+// groupMatcher reproduces the matching of the group and name search
+// parameters on 3.96 (docs/nexus-api.md, "Matching rules").
 func groupMatcher(q string) (func(string) bool, string) {
 	switch {
 	case q == "":

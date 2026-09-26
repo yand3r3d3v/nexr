@@ -280,7 +280,7 @@ retry  →  user-agent  →  auth (Basic, pre-emptive)  →  logging  →  http.
 | Proxy | `http.ProxyFromEnvironment`. |
 | Timeouts | Dial 10 s, TLS handshake 10 s, response headers 5 min (a large upload may take a while to be acknowledged); API calls additionally get `--timeout` through the request context; transfers use an idle-read watchdog (5 min without bytes) instead of a total timeout. |
 | HTTP/2 | `ForceAttemptHTTP2: true` (a custom `TLSClientConfig` otherwise disables it). |
-| Retries | Idempotent methods only (`GET`, `HEAD`, `PUT`, `DELETE`); network errors, 429, 502, 503, 504; exponential backoff (500 ms, ×2, ±20% jitter), `Retry-After` honoured, 3 retries by default. A caller can mark statuses as final for a request (`httpx.WithFinalStatus`): the health check does so for 503, which there means "not available". A `429 Too many authentication attempts` (the authentication rate limit of Nexus 3.96) is never retried, because each further request keeps the user blocked ([nexus-api.md](nexus-api.md#authentication)). Request bodies are replayed through `Request.GetBody`: file uploads provide a `GetBody` that reopens the file; stdin uploads have none and are not retried. |
+| Retries | Idempotent methods only (`GET`, `HEAD`, `PUT`, `DELETE`); network errors, 429, 500, 502, 503, 504 (Nexus answers some transient failures with 500); exponential backoff (500 ms, ×2, ±20% jitter), `Retry-After` honoured, 3 retries by default. A caller can mark statuses as final for a request (`httpx.WithFinalStatus`): the health check does so for 503, which there means "not available". A `429 Too many authentication attempts` (the authentication rate limit of Nexus 3.96) is never retried, because each further request keeps the user blocked ([nexus-api.md](nexus-api.md#authentication)). Request bodies are replayed through `Request.GetBody`: file uploads provide a `GetBody` that reopens the file; stdin uploads have none and are not retried. |
 | Auth | Pre-emptive `Authorization: Basic …`, added only to requests whose origin (scheme, host and port) is the configured Nexus URL. Redirects and absolute URLs taken from responses (for example registry `Link` headers) therefore never carry the credentials to another server; tests pin this. A request can opt out with `httpx.WithoutAuth` (the health check does, see [nexus-api.md](nexus-api.md#server-identification-and-health)). |
 | Logging | `log/slog` at debug level: method, redacted URL, status, duration, attempt number; headers and truncated JSON bodies at `-vv` with `Authorization`/`Proxy-Authorization`/`Cookie`/`Set-Cookie` redacted. |
 | User agent | `nexr/<version> (<os>/<arch>)`. |
@@ -420,13 +420,19 @@ Selection rules:
 | Operation | Preferred | Fallback(s) |
 |---|---|---|
 | one level (`ls`) | Browse, joined with exact group search for `-l`/`--json` metadata | recursive group search, aggregated to one level; then Scan |
-| recursive below `dir` (`ls -r`, `down`, `rm -r`) | Group search `group=/dir*` with client-side prefix filter | Browse traversal plus exact group search per folder (whitespace in names); then Scan |
-| recursive below the root or a short directory | Browse traversal (newer servers), plus exact group search per folder when metadata is needed | Scan |
+| recursive below `dir` (`ls -r`, `down`, `rm -r`) | Group search `group=/dir*` with client-side prefix filter, when `dir` has at least 2 characters and only letters, digits, `-`, `_`, `.` and `/` | Browse traversal plus exact group search per folder (other names, e.g. with spaces); then Scan |
+| recursive below the root, and every format but raw | Scan: every file must be read anyway, and a scan costs one request per 100 files, a traversal one per folder | none |
 | single file resolution | Stat | exact group search (to obtain an asset ID) |
 
 Implementation order follows the version priority. M1 implements what the latest release needs
 (Browse, Group search, Scan, Stat). M4 adds and tests the selection paths used when the Browse API is
 missing (3.71 and other releases without it).
+
+`files.Service` implements the strategies against a small interface (`files.API`) that
+`*nexus.Client` satisfies. It learns on first use whether the server has the Browse API (a `404`
+for a repository that exists means "no") and remembers it. Metadata for one level comes from an
+exact group search for raw repositories and from `HEAD` requests for other formats and for files
+that the search index does not know yet.
 
 Every strategy produces the same stream of `files.Entry` values. Results are always filtered on the
 client by exact path prefix, because search-based strategies may return false positives
@@ -855,7 +861,7 @@ hook for this.
 | Workflow | Trigger | Jobs |
 |---|---|---|
 | `ci.yml` | push, pull request | lint; unit tests on ubuntu, macos and windows (Go stable and oldstable); race tests on ubuntu; `goreleaser --snapshot` build of all targets; `govulncheck` |
-| `e2e.yml` (from M1) | nightly, manual, before release | latest Nexus release; matrix with 3.71 added in M4: bootstrap container, run `test/e2e` |
+| `e2e.yml` (from M1) | nightly, manual, before release | matrix of the latest Nexus release and 3.71: bootstrap a container, run `test/e2e` (including a 1 GiB transfer) |
 | `release.yml` | tag `v*` | GoReleaser: build, archive, checksums, GitHub Release; from M5 also the Homebrew tap update (needs a `HOMEBREW_TAP_GITHUB_TOKEN` secret with write access to the tap repository) |
 
 ### 9.4 Versioning

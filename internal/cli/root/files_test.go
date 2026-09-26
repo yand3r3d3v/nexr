@@ -3,6 +3,7 @@ package root_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -274,4 +275,51 @@ func TestRm(t *testing.T) {
 	if len(fake.Paths("raw")) != 0 {
 		t.Fatalf("left %q", fake.Paths("raw"))
 	}
+}
+
+// AC-7: remote paths with "..", absolute paths or names reserved on the local
+// system never cause writes outside DEST. Real Nexus normalises such paths,
+// so they are planted in the fake.
+func TestDownloadNeverLeavesDest(t *testing.T) {
+	fake, inv := rawFixture(t)
+	fake.PutFile("raw", "d/ok.txt", []byte("ok"))
+	fake.PutFile("raw", "d/../../evil.txt", []byte("evil"))
+	fake.PutFile("raw", "d/sub/../../../evil2.txt", []byte("evil"))
+	if runtime.GOOS == "windows" {
+		fake.PutFile("raw", "d/CON", []byte("reserved"))
+		fake.PutFile("raw", "d/aux.txt", []byte("reserved"))
+	}
+	root := t.TempDir()
+	dest := filepath.Join(root, "a", "b")
+	r := inv.run(t, "down", "raw/d/", dest)
+	mustExit(t, r, 6)
+	mustContain(t, r, "stderr", "unsafe remote path")
+	if got, err := os.ReadFile(filepath.Join(dest, "ok.txt")); err != nil || string(got) != "ok" {
+		t.Fatalf("the safe file was not downloaded: %q, %v", got, err)
+	}
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && p != filepath.Join(dest, "ok.txt") {
+			t.Errorf("unexpected file %s", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompletePaths(t *testing.T) {
+	fake, inv := rawFixture(t)
+	fake.PutFile("raw", "app/1.0/a.txt", []byte("a"))
+	fake.PutFile("raw", "app/readme", []byte("r"))
+	r := inv.run(t, "__complete", "ls", "ra")
+	mustContain(t, r, "stdout", "raw/\n")
+	mustContain(t, r, "stdout", ":6\n") // no space, no files
+	r = inv.run(t, "__complete", "down", "raw/app/")
+	mustContain(t, r, "stdout", "raw/app/1.0/\nraw/app/readme\n")
+	r = inv.run(t, "__complete", "rm", "nope/x")
+	mustExit(t, r, 0)
 }

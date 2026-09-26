@@ -297,7 +297,8 @@ func retryable(resp *http.Response, err error) bool {
 		return !errors.As(err, &kinded) // our own errors (e.g. password lookup) are not transient
 	}
 	switch resp.StatusCode {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+	case http.StatusInternalServerError, http.StatusTooManyRequests, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return true
 	}
 	return false

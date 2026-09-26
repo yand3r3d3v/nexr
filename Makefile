@@ -39,7 +39,7 @@ cover: ## Write a coverage report to coverage.html
 
 e2e: build ## Run the end-to-end tests against Nexus in Docker (NEXUS_VERSION=3.96.3)
 	@eval "$$(scripts/e2e-nexus.sh start $(NEXUS_VERSION))" && \
-		NEXR_E2E_BINARY="$(CURDIR)/$(BIN)" $(GO) test -tags e2e -count=1 ./test/e2e/...
+		NEXR_E2E_BINARY="$(CURDIR)/$(BIN)" $(GO) test -tags e2e -count=1 -timeout 30m ./test/e2e/...
 
 e2e-down: ## Remove the Nexus container of the end-to-end tests
 	scripts/e2e-nexus.sh stop $(NEXUS_VERSION)

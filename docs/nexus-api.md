@@ -306,6 +306,8 @@ versions of a component across all repositories. It cannot filter by repository.
 | Quoted value `"X"` | exact phrase (tested with `group`) | exact phrase; a wildcard outside the quotes does **not** make it a prefix (`"/dir/sub"*` matched only `/dir/sub`) |
 | Unquoted value with spaces | `group=/space dir*` returned **nothing** | split into terms; `group=/space dir*` and `group=/space dir/sub dir` returned **nothing** (false negatives) |
 | Values with `-`, `,`, non-ASCII | fine for `group` | fine for `group` |
+| Quoted value with `;`, spaces or an escaped quote (`"/dq\"dir"`) | not tested | exact match |
+| `group="/"` or `group=/` | not tested | the files at the root |
 
 Observed raw queries (files under `dir/`, `dir-sibling/`, `other/dir/`):
 
@@ -341,8 +343,9 @@ useful for SemVer, so `nexr` sorts on the client.
 **(3.96 only; `404` on 3.71.)**
 
 * `GET /v1/repositories/{repo}/browse?path=<dir>` lists one level. `path` accepts `/`, `/dir` or
-  `dir`. A non-existent path returns `[]`. An unknown repository returns a siesta `404`. The response
-  is not paginated.
+  `dir`, and names with spaces, `;` or quotes (URL-encoded). A non-existent path returns `[]`. An
+  unknown repository returns a siesta `404`. The response is not paginated. 3.71 answers `404` with
+  no body, even for an existing repository.
 
   ```json
   [
@@ -382,6 +385,27 @@ useful for SemVer, so `nexr` sorts on the client.
 
 **The `ETag` is the SHA-1 of the content** (verified with `sha1sum` on 3.71 and 3.96), which allows
 integrity checks without an extra API call.
+
+More observations on 3.96 (M1):
+
+* **Encode every path segment.** Names with spaces, `;`, `#`, `?`, `%`, `+`, `[]`, quotes, `:`,
+  `*`, `|`, `<`, leading or trailing spaces, trailing dots and non-ASCII characters all round-trip
+  when each segment is percent-encoded (Go's `url.PathEscape`). An unencoded `;` would start a Jetty
+  path parameter and be cut off.
+* **A backslash is a directory separator.** `PUT …/dir/back%5Cslash.txt` stores `dir/back/slash.txt`
+  (browse shows a folder `back`); both URLs return the file. `nexr up` refuses local names that
+  contain `\`.
+* **Never upload with a form content type.** A `PUT` with `Content-Type:
+  application/x-www-form-urlencoded` (curl's default for `--data`) answers `201` but stores an
+  **empty** file: Jetty consumes the body as form parameters.
+* Strict content validation compares the detected type with the type expected for the file
+  **extension**; the request's `Content-Type` does not matter (`fake.png` with `image/png` is still
+  rejected). Files without an extension or with unknown extensions are accepted.
+* Errors: missing file → `404` with the path as `text/plain` body; unknown repository →
+  `404 Repository not found`; write policy `DENY` → `400 <repo>/<path> is read-only`; `PUT` to a
+  group or proxy repository → `405`; `DELETE` of a directory path → `404`.
+* A `PUT` to a path ending in `/` is accepted (`201`); `nexr` never sends one.
+* The Components API upload accepts a streamed (chunked) multipart body.
 
 ## Component upload (multipart)
 

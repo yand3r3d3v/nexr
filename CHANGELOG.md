@@ -9,6 +9,18 @@ JSON output may change between minor versions.
 
 ### Added
 
+- `nexr ls`: list raw (and other) repositories by path, one level or recursively (`-r`), with
+  sizes, times and checksums (`-l`, `--json`), name-prefix matching and sorting.
+- `nexr up`: upload files, directory trees and stdin to hosted raw repositories, in parallel, with
+  `--include`/`--exclude`, `--skip-existing`, `--verify`, `--dry-run` and the Components API as an
+  alternative method.
+- `nexr down`: download files and directory trees, verified against the checksums of Nexus and
+  written atomically; remote names that would leave the destination are rejected.
+- `nexr rm`: delete files and directories (`-r`) with dry runs, confirmation of bulk deletions,
+  `--ignore-missing` and server-side folder deletion.
+- Patterns follow the `.gitignore` rules (`*.log` matches at any depth).
+- Idempotent requests are also retried after `500` responses.
+
 - Configuration from flags, environment variables (`NEXUS_*`, `NEXR_*`) and an optional YAML config
   file with profiles, with a documented precedence order.
 - Credential scoping: credentials are only sent to the URL they were configured for.

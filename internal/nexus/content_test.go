@@ -175,10 +175,10 @@ func TestAssetsAndSearch(t *testing.T) {
 		group string
 		want  []string
 	}{
-		{nexus.QuoteGroup("dir"), []string{"dir/a.txt"}},
-		{nexus.QuoteGroup(""), []string{"root.txt"}},
-		{nexus.QuoteGroup("space dir"), []string{"space dir/d.txt"}},
-		{nexus.QuoteGroup(`q"dir`), []string{`q"dir/e.txt`}},
+		{nexus.QuotePath("dir"), []string{"dir/a.txt"}},
+		{nexus.QuotePath(""), []string{"root.txt"}},
+		{nexus.QuotePath("space dir"), []string{"space dir/d.txt"}},
+		{nexus.QuotePath(`q"dir`), []string{`q"dir/e.txt`}},
 		{"/dir*", []string{"dir-sibling/c.txt", "dir/a.txt", "dir/sub/b.txt"}},
 		{"/space dir*", nil}, // false negative, as on Nexus
 	} {

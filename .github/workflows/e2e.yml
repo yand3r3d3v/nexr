@@ -1,0 +1,38 @@
+name: E2E
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # nightly
+  workflow_dispatch:
+    inputs:
+      nexus_versions:
+        description: Nexus Repository versions (sonatype/nexus3 image tags) as a JSON list
+        default: '["3.96.3", "3.71.0"]'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e (Nexus ${{ matrix.nexus }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        nexus: ${{ fromJSON(inputs.nexus_versions || '["3.96.3", "3.71.0"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - name: End-to-end tests
+        run: make e2e NEXUS_VERSION="$NEXUS_VERSION"
+        env:
+          NEXUS_VERSION: ${{ matrix.nexus }}
+          NEXR_E2E_LARGE_MB: "1024"
+      - name: Nexus log
+        if: failure()
+        run: docker logs --tail 200 "nexr-e2e-$NEXUS_VERSION"
+        env:
+          NEXUS_VERSION: ${{ matrix.nexus }}

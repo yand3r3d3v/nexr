@@ -1172,7 +1172,7 @@ code is used. If the failures have different categories, or some items succeeded
 ### 8.4 Reliability
 
 * **NFR-REL-1 (M), retries.** Idempotent requests (`GET`, `HEAD`, `PUT`, `DELETE`) are retried on
-  connection errors and on HTTP 429, 502, 503 and 504, with exponential backoff and jitter. The
+  connection errors and on HTTP 429, 500, 502, 503 and 504, with exponential backoff and jitter. The
   default is 3 retries, starting at 500 ms, and `Retry-After` is honoured. `POST` requests are never
   retried automatically. A `429 Too many authentication attempts` from the authentication rate limit
   of Nexus 3.96 is never retried, because every further request keeps the user blocked.

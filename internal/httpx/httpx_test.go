@@ -61,6 +61,27 @@ func TestRetriesIdempotentRequests(t *testing.T) {
 	}
 }
 
+func TestRetriesOn500(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError) // e.g. a transient database error
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c, _ := NewClient(Options{Retries: 3, Sleep: noSleep})
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("status %d after %d calls", resp.StatusCode, calls.Load())
+	}
+}
+
 func TestFinalStatusIsNotRetried(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

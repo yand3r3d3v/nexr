@@ -103,6 +103,8 @@ type AssetQuery struct {
 	// files directly in /dir, "/dir*" every file below /dir, and also below
 	// /dir-sibling, so results must be filtered by path.
 	Group string
+	// Name selects raw assets by path: `"/dir/file"` (quoted) matches one file.
+	Name string
 }
 
 // SearchAssets iterates over the assets that match q (GET /v1/search/assets).
@@ -112,12 +114,16 @@ func (c *Client) SearchAssets(ctx context.Context, q AssetQuery) iter.Seq2[Asset
 	if q.Group != "" {
 		v.Set("group", q.Group)
 	}
+	if q.Name != "" {
+		v.Set("name", q.Name)
+	}
 	return assets(Paginate[assetJSON](ctx, c, "/v1/search/assets", v))
 }
 
-// QuoteGroup returns an exact group search value for the raw directory dir
-// ("" is the root), which also works with spaces and quotes in names.
-func QuoteGroup(dir string) string {
+// QuotePath returns an exact search value for a raw directory (group) or file
+// (name): `"/dir"`, or `"/"` for the root. Quoted values also work with
+// spaces, semicolons and quotes in names.
+func QuotePath(dir string) string {
 	return `"/` + strings.ReplaceAll(strings.ReplaceAll(dir, `\`, `\\`), `"`, `\"`) + `"`
 }
 

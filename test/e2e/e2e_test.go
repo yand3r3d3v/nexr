@@ -26,9 +26,10 @@ type result struct {
 	stderr string
 }
 
-// nexr runs the binary with the Nexus environment, changed by env ("KEY=value"
-// sets a variable, "KEY=" removes it). The user's config file is never read.
-func nexr(t *testing.T, env []string, args ...string) result {
+// command prepares the binary with the Nexus environment, changed by env
+// ("KEY=value" sets a variable, "KEY=" removes it). The user's config file
+// is never read.
+func command(t *testing.T, env []string, args ...string) *exec.Cmd {
 	t.Helper()
 	bin := os.Getenv("NEXR_E2E_BINARY")
 	if bin == "" {
@@ -58,6 +59,13 @@ func nexr(t *testing.T, env []string, args ...string) result {
 	for k, v := range vars {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+	return cmd
+}
+
+// nexr runs the binary; see command.
+func nexr(t *testing.T, env []string, args ...string) result {
+	t.Helper()
+	cmd := command(t, env, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

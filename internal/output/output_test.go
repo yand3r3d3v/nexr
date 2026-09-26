@@ -2,6 +2,7 @@ package output
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -110,5 +111,49 @@ func TestHumanTimeAndTableLen(t *testing.T) {
 	tbl.AddRow("2")
 	if tbl.Len() != 2 {
 		t.Fatalf("Len() = %d", tbl.Len())
+	}
+}
+
+func TestProgress(t *testing.T) {
+	ios, _, _, errOut := Test()
+	if ios.NewProgress("uploading", 1, 1) != nil {
+		t.Fatal("no progress without a terminal")
+	}
+	var nilProgress *Progress
+	nilProgress.Add(1) // a nil progress does nothing
+	nilProgress.FileDone()
+	nilProgress.Clear()
+	nilProgress.Stop()
+
+	ios.SetTTY(false, false, true)
+	p := ios.NewProgress("uploading", 2, 2048)
+	p.Add(1024)
+	p.FileDone()
+	p.draw()
+	if got := errOut.String(); !strings.Contains(got, "uploading 1/2 files, 1.0 KiB of 2.0 KiB") {
+		t.Fatalf("progress line %q", got)
+	}
+	p.Stop()
+	if !strings.HasSuffix(errOut.String(), "\r\033[K") {
+		t.Fatalf("the line must be cleared: %q", errOut.String())
+	}
+}
+
+func TestJSONArray(t *testing.T) {
+	for _, pretty := range []bool{false, true} {
+		var b bytes.Buffer
+		a := NewJSONArray(&b, pretty)
+		_ = a.Add(map[string]int{"a": 1})
+		_ = a.Add(map[string]int{"b": 2})
+		_ = a.Close()
+		var got []map[string]int
+		if err := json.Unmarshal(b.Bytes(), &got); err != nil || len(got) != 2 || got[1]["b"] != 2 {
+			t.Fatalf("pretty=%v: %q, %v", pretty, b.String(), err)
+		}
+	}
+	var b bytes.Buffer
+	_ = NewJSONArray(&b, true).Close()
+	if b.String() != "[]\n" {
+		t.Fatalf("empty array %q", b.String())
 	}
 }

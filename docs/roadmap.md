@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | M0 (foundation) implemented; M1 (raw files) next |
+| **Status** | M0 (foundation) and M1 (raw files) implemented; M2 (Docker/OCI images) next |
 | **Date** | 2026-09-26 |
 | **Related documents** | [Specification](specification.md) · [Architecture](architecture.md) · [Nexus API notes](nexus-api.md) |
 
@@ -43,7 +43,7 @@
 |---|---|
 | Packages | `remote` (path parsing and sanitisation), `files` (listing engine: browse, group search, scan, stat; transfer engine; removal), `formats/raw`, `workpool` |
 | Commands | `nexr ls`, `nexr up`, `nexr down`, `nexr rm` |
-| Tests | `test/e2e` for raw against the latest release; `e2e.yml` workflow (nightly and on demand) |
+| Tests | `test/e2e` for raw against the latest release; `e2e.yml` workflow (nightly and on demand). The suite already passes against 3.71.0 as well, so the nightly run covers both |
 | Exit criteria | AC-4, AC-5, AC-6, AC-7 |
 
 ### M2: Docker/OCI images → `v0.3.0`
