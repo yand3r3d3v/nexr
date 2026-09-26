@@ -255,6 +255,9 @@ func TestRm(t *testing.T) {
 	}
 	r = inv.run(t, "rm", "raw/keep.txt")
 	mustExit(t, r, 5)
+	r = inv.run(t, "rm", "raw/keep.txt", "--dry-run")
+	mustExit(t, r, 0) // a dry run changes nothing and succeeds (FR-SAFE-1), but says what is missing
+	mustContain(t, r, "stderr", "failed    raw/keep.txt: not found")
 	r = inv.run(t, "rm", "raw/keep.txt", "--ignore-missing", "--json")
 	mustExit(t, r, 0)
 	doc := decode[map[string]any](t, r, r.stdout)

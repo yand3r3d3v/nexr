@@ -166,7 +166,7 @@ func runRm(cmd *cobra.Command, f *cmdutil.Factory, opts *rmOptions, args []strin
 		e := itemError(err)
 		j.Error = &e
 		result.Failed = append(result.Failed, j)
-		if !f.JSON() && len(plan.Items) > 1 {
+		if !f.JSON() && (len(plan.Items) > 1 || opts.dryRun) {
 			fmt.Fprintf(f.IO.ErrOut, "failed    %s: not found\n", it.Ref())
 		}
 	}
