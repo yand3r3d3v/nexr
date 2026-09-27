@@ -282,8 +282,18 @@ OrientDB releases (≤ 3.70) stored `name` and `path` without the leading slash 
   }
   ```
 
-  `totalSize` is a human-readable string. For an index it describes one platform.
-* The `oci` format **(3.96)** uses the same model (`format: "oci"`).
+  `totalSize` is a human-readable string (1024-based units) in `GET /v1/assets`, but **a number of
+  bytes in `GET /v1/search` and `/v1/search/assets`** (`"totalSize": 2206402`). For an index the
+  attributes describe one of its platforms only (e.g. `linux/arm` of a four-platform index) and
+  carry no `totalSize`. Images built without a date (`crane`, `ko`, reproducible builds) report
+  `"created": "0001-01-01T00:00:00Z"`.
+* The `oci` format **(3.96)** uses the same model (`format: "oci"`); its manifest assets carry
+  `oci: {artifactType, content_digest}` instead of `docker` attributes.
+* Search by image: `GET /v1/search?repository=R&name=team/app` returns one component per tag.
+  `name` matches exactly and case-sensitively (`team/app` does not match `team/app-x` or
+  `Team/App`), also with `.`, `_`, `__` and `-` in the name; a trailing `*` is a wildcard.
+  `version=TAG` matches one tag exactly. `docker.imageName` works too. Verified on 3.71 and 3.96.
+  A repository that does not exist gives an empty result, not an error.
 * **Deleting a tag component removes only that tag** (verified on 3.71 and 3.96). Other tags pointing
   to the same digest remain pullable, and the manifest by digest stays until the Docker GC task removes
   unreferenced data.
@@ -445,6 +455,11 @@ and 3.96.
 | `DELETE …/v2/<name>/manifests/<digest>` | `202`; removes **every tag** that points to the digest |
 | `DELETE …/v2/<name>/manifests/<tag>` | `202`; removes only that tag (Nexus-specific, not in the Registry spec) |
 
+`n=0` or a large `n` returns everything; 3.96 accepted `n=100000`. Names and tags come sorted.
+`HEAD` of a manifest also returns `Last-Modified` and an `ETag` (the SHA-1 of the manifest); the
+`Last-Modified` of a tag that shares its manifest with another tag is that of the manifest blob, not
+the push time of the tag, so push times come from the search index.
+
 **Pagination `Link` header (3.71).** On the path-based endpoint, 3.71 returns a `Link` URL without the
 repository prefix:
 
@@ -458,8 +473,25 @@ Following it literally gives `404`. Re-issuing `?n=1&last=multi%2Falpine` agains
 reverse proxy, the host in the `Link` URL may also differ from the one the client used. Clients should
 therefore read `n` and `last` from the header and build the next request themselves.
 
+**Blob upload `Location` (3.71 and 3.96).** For the same reason, `POST
+…/repository/<repo>/v2/<name>/blobs/uploads/` answers `202` with `Location: /v2/<name>/blobs/uploads/<uuid>`,
+without the repository prefix; a `PUT` there gives `405`. Resolved against
+`<base>/repository/<repo>`, the upload works, and so does a manifest `PUT`: images can be pushed
+through the path-based endpoint by clients that handle this (the e2e tests do), while `docker` and
+`crane` need a connector port or `pathEnabled` routing.
+
+**Authentication.** Basic credentials are accepted on every docker repository. For an anonymous
+request, repositories with `forceBasicAuth: false` answer
+`WWW-Authenticate: Bearer realm="<base>/v2/token",service="<base>/v2/token"` (the Docker Bearer
+Token Realm); the others answer with a Basic challenge. With anonymous access disabled, the token
+endpoint on the main port returned `404` in our tests.
+
 `nexr` deletes tags through `DELETE /v1/components/{id}` instead of the Registry API (precise,
-documented REST API).
+documented REST API). Verified on 3.71 and 3.96: deleting the component of `1.1` leaves `latest`
+(same digest) pullable, and after deleting the tags of both platform manifests of an index and
+running *Docker - Delete unused manifests and images* (`deployOffset` 0), the index and its children
+still pull for both platforms, while manifests that nothing references any more (e.g. the
+intermediate manifests that `crane mutate` leaves behind) are gone.
 
 With `pathEnabled: true` **(3.96)**, Docker clients use `<host>/<repo>/<image>:<tag>` and the
 Registry API is also served at `<base>/v2/<repo>/<image>/…`. `<base>/v2/_catalog` is not available
@@ -589,6 +621,8 @@ features, so `nexr` detects them at run time.
 | `/v1/search/versions`, `/v1/search/suggest` | no | yes |
 | `oci` format, Docker `pathEnabled` routing | no | yes |
 | Registry `Link` header on `/repository/<repo>/v2/` | missing the repository prefix | correct |
+| Registry upload `Location` on `/repository/<repo>/v2/` | missing the repository prefix | missing the repository prefix |
+| Docker image names with `__` | rejected on push (`400`) | accepted |
 | Registry API under `/repository/<repo>/v2/` | yes | yes |
 | Content `ETag` = SHA-1 | yes | yes |
 | Community Edition EULA endpoint | no | yes |

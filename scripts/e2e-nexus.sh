@@ -6,11 +6,13 @@
 #   go test -tags e2e ./test/e2e/...
 #   scripts/e2e-nexus.sh stop 3.96.3
 #
-# The container listens on 127.0.0.1:$NEXR_E2E_PORT (default 18081). The script
-# sets the admin password to $NEXR_E2E_PASSWORD (default admin123), accepts the
-# Community Edition EULA where the server asks for it, disables anonymous
-# access, and creates the hosted repositories raw-e2e and docker-e2e. Running
-# it again reuses the container.
+# The container listens on 127.0.0.1:$NEXR_E2E_PORT (default 18081), and the
+# Docker repository docker-e2e has a connector on 127.0.0.1:$NEXR_E2E_DOCKER_PORT
+# (default 18082) for docker and crane, which need the registry at the root of
+# a host. The script sets the admin password to $NEXR_E2E_PASSWORD (default
+# admin123), accepts the Community Edition EULA where the server asks for it,
+# disables anonymous access, and creates the hosted repositories raw-e2e and
+# docker-e2e. Running it again reuses the container.
 set -euo pipefail
 
 usage() {
@@ -22,6 +24,7 @@ usage() {
 action=$1
 version=${2:-3.96.3}
 port=${NEXR_E2E_PORT:-18081}
+docker_port=${NEXR_E2E_DOCKER_PORT:-18082}
 password=${NEXR_E2E_PASSWORD:-admin123}
 name=nexr-e2e-${version}
 url=http://127.0.0.1:${port}
@@ -40,7 +43,8 @@ start() {
 	if [ -z "$(docker ps -q --filter "name=^${name}$")" ]; then
 		docker rm -f "$name" >/dev/null 2>&1 || true
 		log "starting sonatype/nexus3:${version} on ${url}"
-		docker run -d --name "$name" -p "127.0.0.1:${port}:8081" "sonatype/nexus3:${version}" >/dev/null
+		docker run -d --name "$name" -p "127.0.0.1:${port}:8081" -p "127.0.0.1:${docker_port}:5000" \
+			"sonatype/nexus3:${version}" >/dev/null
 	fi
 
 	log "waiting for Nexus to start (this takes a minute or two)"
@@ -83,10 +87,10 @@ start() {
 	create_repo raw raw-e2e \
 		'{"name": "raw-e2e", "online": true, "storage": {"blobStoreName": "default", "strictContentTypeValidation": false, "writePolicy": "ALLOW"}}'
 	create_repo docker docker-e2e \
-		'{"name": "docker-e2e", "online": true, "storage": {"blobStoreName": "default", "strictContentTypeValidation": true, "writePolicy": "ALLOW"}, "docker": {"v1Enabled": false, "forceBasicAuth": true}}'
+		'{"name": "docker-e2e", "online": true, "storage": {"blobStoreName": "default", "strictContentTypeValidation": true, "writePolicy": "ALLOW"}, "docker": {"v1Enabled": false, "forceBasicAuth": true, "httpPort": 5000}}'
 
 	log "ready"
-	printf 'export NEXUS_URL=%s NEXUS_USER=admin NEXUS_PASSWORD=%s\n' "$url" "$password"
+	printf 'export NEXUS_URL=%s NEXUS_USER=admin NEXUS_PASSWORD=%s NEXR_E2E_REGISTRY=127.0.0.1:%s\n' "$url" "$password" "$docker_port"
 }
 
 # create_repo FORMAT NAME JSON creates a hosted repository unless it exists.

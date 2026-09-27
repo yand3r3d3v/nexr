@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | M0 (foundation) and M1 (raw files) implemented; M2 (Docker/OCI images) next |
+| **Status** | M0 (foundation), M1 (raw files) and M2 (Docker/OCI images) implemented; M3 (tasks, GC and API) next |
 | **Date** | 2026-09-26 |
 | **Related documents** | [Specification](specification.md) · [Architecture](architecture.md) · [Nexus API notes](nexus-api.md) |
 
@@ -53,7 +53,7 @@
 | Packages | `registry` (catalog, tags, HEAD, Bearer challenge, `Link` handling), `images`, `retention` |
 | Commands | `nexr docker ls`, `nexr docker tags`, `nexr docker rm` (explicit tags, `--keep`, `--older-than`, `--all`, `--match`, `--exclude`, `--sort`) |
 | Registry endpoint | default `<base>/repository/<repo>/v2/`, overrides via `--registry-url`, `NEXR_DOCKER_REGISTRY_URL` and `docker.registry_urls`; image references with a registry host |
-| Tests | e2e fixtures pushed with `crane` (single-arch, multi-arch index, attestations); a reverse-proxy setup for the registry URL override |
+| Tests | e2e fixtures pushed through the Registry API by the tests themselves, with the calls of `docker push` (Docker v2 manifests, OCI manifests, a multi-platform OCI index; verified by hand with `crane` too); a reverse proxy and a Docker connector for the registry endpoint; the Docker cleanup task on 3.96. The suite also passes against 3.71.0 (without the cleanup task, which 3.71 cannot create through the API). The fake already covers the 3.71 registry `Link` header and missing Docker attributes |
 | Exit criteria | AC-8, AC-9 |
 
 ### M3: Tasks, GC and API → `v0.4.0`

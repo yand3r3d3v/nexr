@@ -226,9 +226,10 @@ type Factory struct {
 
 func (f *Factory) Config() (*config.Resolved, error) // resolved once; warnings printed once
 func (f *Factory) Nexus() (*nexus.Client, error)
-// Added with the features that need them:
-// func (f *Factory) Registry(repo string) (*registry.Client, error)
-// func (f *Factory) Now() time.Time
+// Registry returns the Registry API client of a repository and where its endpoint comes from:
+// flagURL (--registry-url), the configured endpoint (FR-NET-3) or <url>/repository/REPO/.
+// Its HTTP client sends the credentials to the Nexus URL and to that endpoint.
+func (f *Factory) Registry(repo, flagURL string) (*registry.Client, config.Setting[string], error)
 ```
 
 Lazy construction keeps `nexr version` and `nexr completion` fast and lets them work without any
@@ -372,11 +373,15 @@ the strategy selection in the domain layer.
 A Docker Registry HTTP API v2 client, scoped to one repository. It covers the few calls `nexr` needs:
 
 ```go
-func New(hc *http.Client, base *url.URL, creds Credentials) *Client // base = <url>/repository/REPO/
+func New(base string, hc *http.Client, timeout time.Duration) (*Client, error) // base = <url>/repository/REPO/
 func (c *Client) Catalog(ctx context.Context) iter.Seq2[string, error]
 func (c *Client) Tags(ctx context.Context, image string) iter.Seq2[string, error]
 func (c *Client) Head(ctx context.Context, image, ref string) (Descriptor, error) // digest, media type, size
 ```
+
+Errors are `*registry.Error` values with the status code and the registry error code
+(`NAME_UNKNOWN`, `MANIFEST_UNKNOWN`), so that "this image does not exist" can be told apart from a
+plain `404` of a wrong endpoint.
 
 * Pagination uses `?n=<page>&last=<cursor>`. The RFC 5988 `Link: <…>; rel="next"` header tells the
   client whether there is a next page, but its URL is **not** followed. On 3.71 it points to `/v2/…`
@@ -384,15 +389,19 @@ func (c *Client) Head(ctx context.Context, image, ref string) (Descriptor, error
   reads `n` and `last` from it and builds the next request against its own base URL.
 * `Head` sends an `Accept` list covering OCI index/manifest and Docker manifest list/v2 media types,
   and reads `Docker-Content-Digest`.
-* Authentication: Basic credentials are sent pre-emptively when configured. On a
-  `401` with a `WWW-Authenticate: Bearer realm=…,service=…,scope=…` challenge (anonymous or
-  token-realm setups), the client obtains a token from the realm, with Basic credentials if
-  available, caches it per scope, and retries once.
+* Authentication: Basic credentials are sent pre-emptively when configured (by the `httpx` auth
+  layer, for the Nexus URL and the registry endpoint only). On a `401` with a
+  `WWW-Authenticate: Bearer realm=…,service=…,scope=…` challenge (anonymous or token-realm setups),
+  the client obtains a token from the realm (the auth layer adds Basic credentials only if the realm
+  is on one of those origins), caches it per scope (`registry:catalog:*`,
+  `repository:<image>:pull`), and retries once.
 * The base URL is resolved per repository from `--registry-url`, `NEXR_DOCKER_REGISTRY_URL` and
   `docker.registry_urls[REPO]` with the usual precedence rules, falling back to the default
-  `<url>/repository/REPO/` (spec FR-NET-3). The same
-  map, inverted (registry host → repository), resolves image references that start with a registry
-  host (FR-IMGREF-3).
+  `<url>/repository/REPO/` (spec FR-NET-3). `config.Resolved` keeps the source of every
+  `docker.registry_urls` entry, so that an explicitly selected profile beats
+  `NEXR_DOCKER_REGISTRY_URL`, which beats the config file, and applies the credential scoping rule
+  to endpoints (`RegistryURL(repo)`). The same map, inverted (registry host → repository), resolves
+  image references that start with a registry host (`RepositoriesForHost`, FR-IMGREF-3).
 
 ### 5.6 Files domain (`internal/files`)
 
@@ -508,32 +517,47 @@ generic Components API uploader.
 
 Reasons for the split are in [ADR-005](#adr-005-tag-metadata-from-search-deletion-through-components).
 
+```go
+func Open(ctx context.Context, api API, reg Registry, repo string) (*Service, error) // docker or oci only
+func (s *Service) Images(ctx context.Context) ([]string, error)                     // catalog, else components
+func (s *Service) Stats(ctx context.Context) (map[string]Stats, error)              // tag count, last push
+func (s *Service) Tags(ctx context.Context, image string) ([]Tag, error)             // registry ∪ search
+func (s *Service) FindTag(ctx context.Context, image, tag string) (Tag, bool, error)
+func (s *Service) DeleteTag(ctx context.Context, t Tag, verify bool) error          // verify: digest unchanged
+```
+
+The Registry API decides which tags exist (it is never behind); the search index adds push times,
+component IDs and attributes. A tag that is not indexed yet gets its digest from a `HEAD` and no push
+time. With `verify`, `DeleteTag` first checks through the registry that the tag still points to the
+digest it had when the plan was made, so a tag pushed again in the meantime is not deleted
+(ErrChanged).
+
 The retention planner is a pure function with no I/O. All of FR-DRM-2 is implemented and tested here:
 
 ```go
 type Policy struct {
-    Keep      int           // 0 = unset
-    OlderThan time.Duration // 0 = unset
+    Keep      int              // 0 = unset
+    OlderThan time.Duration    // 0 = unset
     All       bool
-    Match     []Pattern
-    Exclude   []Pattern     // flag values + docker.exclude from config
-    Sort      SortKey       // SortPushed | SortSemVer | SortName
+    Match     []remote.Pattern
+    Exclude   []remote.Pattern // flag values + docker.exclude from config
+    Sort      SortKey          // SortPushed | SortSemVer | SortName
     Now       time.Time
 }
 
 type Tag struct {
     Name   string
     Pushed time.Time // zero if unknown (not yet indexed) → never a candidate
-    Digest string
 }
 
 type Decision struct {
     Tag    Tag
     Action Action // Keep | Delete | Skip
-    Reason string // "protected (latest)", "newest 2", "beyond newest 2", "not semver", …
+    Reason string // "protected (latest)", "newest 2", "beyond newest 2", "not a version", …
 }
 
 func Plan(tags []Tag, p Policy) ([]Decision, error)
+func Compare(a, b Tag, key SortKey) int // the order of Plan, also used by "docker tags"
 ```
 
 The same `[]Decision` drives the dry-run table, the confirmation prompt, the execution and the JSON
@@ -677,12 +701,14 @@ sequenceDiagram
     R-->>CLI: decisions
     CLI->>CLI: print plan, confirm (TTY) or require --yes
     loop each "delete" decision (worker pool)
-        CLI->>I: DeleteTag(componentID)
+        CLI->>I: DeleteTag(tag, verify)
+        I->>G: HEAD /v2/team/app/manifests/TAG
+        G-->>I: Docker-Content-Digest (unchanged, else skip)
         I->>N: DeleteComponent(id)
         N->>X: DELETE /v1/components/{id}
         X-->>N: 204
     end
-    CLI->>CLI: summary + hint "run nexr gc"
+    CLI->>CLI: summary + hint about the cleanup tasks ("nexr gc" from M3)
 ```
 
 ### 6.3 `nexr gc --repo docker-hosted`
@@ -777,22 +803,29 @@ sequenceDiagram
 | **Client** | `nexus`, `registry`, `httpx`: request construction, pagination, error decoding, retries, auth challenges, redirects | `net/http/httptest`, JSON fixtures captured from real Nexus 3.96.3 (and 3.71.0 from M4) (`testdata/`) |
 | **Domain** | `files`, `images`, `tasks` against the in-memory fake | `nexustest` in the *latest* dialect, plus the *baseline* dialect from M4 |
 | **Command** | whole commands in-process: flags → output → exit code | fake `IOStreams`, `nexustest`, golden files (`go test ./... -update` refreshes them) |
-| **End-to-end** | the built binary against real Nexus containers | build tag `e2e`, `scripts/e2e-nexus.sh`, Docker, `crane` for image fixtures |
+| **End-to-end** | the built binary against real Nexus containers | build tag `e2e`, `scripts/e2e-nexus.sh`, Docker; image fixtures pushed by the tests through the Registry API |
 
 **The in-memory fake (`internal/nexus/nexustest`)** implements the endpoints `nexr` uses: repositories,
 components, assets, search (group/name/version with the wildcard rules), browse, content
-GET/HEAD/PUT/DELETE, registry catalog/tags, and tasks with a simulated state machine. The two
-dialects reproduce the differences listed in spec §3.3: page sizes, the wildcard rule, Browse API and
-task API availability, task properties, Docker attributes, the registry `Link` header, and index lag.
-Fault injection (5xx, delays, resets) tests retries and partial failures.
+GET/HEAD/PUT/DELETE, the Registry API of docker and oci repositories (catalog, tag lists with `n`,
+`last` and `Link`, manifest `HEAD`/`GET`, the Bearer token realm), component deletion, and (from M3)
+tasks with a simulated state machine. `PutImage` stores tags with a digest, media type, push time
+and attributes, and can keep a tag out of the search index to simulate index lag. The two dialects
+reproduce the differences listed in spec §3.3: page sizes, the wildcard rule, Browse API and task
+API availability, task properties, Docker attributes (`WithoutImageAttributes`), the registry
+`Link` header (`WithLegacyRegistryLinks`), and index lag. Fault injection (5xx, delays, resets)
+tests retries and partial failures.
 
 **End-to-end environment.** `scripts/e2e-nexus.sh <version>` starts `sonatype/nexus3:<version>`,
 waits for `/service/rest/v1/status`, reads the generated admin password, sets a known one, accepts the
 Community Edition EULA where required, sets anonymous access explicitly (a fresh 3.71 enables it, a
-fresh 3.96 disables it), creates raw, docker and oci hosted repositories (oci only where the format
-exists), enables the Docker Bearer Token realm, and pushes image fixtures (single-arch and multi-arch)
-with `crane`. The suite runs nightly, on demand, and before every release against the latest Nexus
-release; from M4 on also against 3.71.
+fresh 3.96 disables it), and creates the hosted repositories `raw-e2e` and `docker-e2e` (with a
+Docker connector port for `docker`, `crane` and the connector test of `--registry-url`). The Docker
+tests push their fixtures themselves through `<base>/repository/docker-e2e/v2/`, with the calls of
+`docker push`: Docker v2 and OCI manifests and a multi-platform OCI index. They cover a reverse proxy
+that serves the registry at the root of another host, and run the Docker cleanup task where the
+server can create it (3.96). The suite runs nightly, on demand, and before every release against the
+latest Nexus release and 3.71.
 
 **Coverage and quality gates:** ≥ 80% statements in `internal/`, race detector on Linux, `golangci-lint`
 (errcheck, govet, staticcheck, gosec, revive, …), and `govulncheck`.

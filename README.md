@@ -7,10 +7,11 @@ A command-line tool for
 with repositories, files, container images and storage cleanup from a terminal or a CI job, without
 the web UI.
 
-> **Status: early development.** Milestones M0 and M1 are done: configuration and profiles,
-> `nexr status`, `nexr repos`, `nexr config`, and the file commands `ls`, `up`, `down` and `rm` for
-> raw repositories. Docker images and cleanup follow in the next milestones; see the
-> [roadmap](docs/roadmap.md). Until v1.0, commands and JSON output may still change.
+> **Status: early development.** Milestones M0 to M2 are done: configuration and profiles,
+> `nexr status`, `nexr repos`, `nexr config`, the file commands `ls`, `up`, `down` and `rm` for raw
+> repositories, and `nexr docker ls`, `tags` and `rm` for container images, with retention rules.
+> Storage cleanup (`nexr gc`, `nexr tasks`) follows next; see the [roadmap](docs/roadmap.md). Until
+> v1.0, commands and JSON output may still change.
 
 * One static binary for Linux, macOS and Windows (amd64 and arm64). Nothing else to install.
 * Nexus Repository 3.71 and newer. The latest release (3.96) is supported first; older releases
@@ -114,6 +115,51 @@ $ nexr rm -r raw-releases/myapp/1.3.0/ --dry-run
   after an upload, so a file uploaded in the last seconds may be missing from `ls`, or from
   `down`/`rm -r` of a directory.
 
+Work with container images in docker and oci repositories:
+
+```console
+$ export NEXR_DOCKER_REPO=docker-hosted    # or -R docker-hosted, or docker.repository in the config
+
+$ nexr docker ls -l
+IMAGE         TAGS  LAST PUSHED
+team/app      6     2026-09-26 16:14
+team/worker   2     2026-09-25 09:30
+
+$ nexr docker tags team/app
+TAG     DIGEST               PUSHED            SIZE
+latest  sha256:b7f3d86d6e84  2026-09-26 16:14  2.1 MiB
+v5      sha256:b7f3d86d6e84  2026-09-26 16:13  2.1 MiB
+v4      sha256:c64c687cbea9  2026-09-20 09:41  3.3 MiB
+multi   sha256:ce64758a109e  2026-09-12 18:30  multi-arch
+
+$ nexr docker rm team/app --keep 2 --dry-run
+TAG     PUSHED            ACTION  REASON
+latest  2026-09-26 16:14  keep    protected (latest)
+v5      2026-09-26 16:13  keep    newest 2
+v4      2026-09-20 09:41  keep    newest 2
+v3      2026-09-12 18:30  delete  beyond newest 2
+v2      2026-09-01 07:12  delete  beyond newest 2
+v1      2026-08-14 12:00  delete  beyond newest 2
+dry run: 3 of 6 tags would be deleted from docker-hosted/team/app
+
+$ nexr docker rm team/app:v1 team/app:v2 --yes
+$ nexr docker rm team/app --older-than 30d --match 'feature-*' --yes
+$ nexr docker rm 'team/*' --keep 10 --sort semver --yes
+```
+
+* Tags are listed through the Registry API, with push times, digests and sizes from the search
+  index. Build time, platform and size need Nexus 3.96 (3.71 does not record them).
+* Deleting a tag removes only that tag: other tags of the same manifest (like `latest` and `v5`
+  above) and the platform manifests of multi-arch images stay.
+* Retention rules keep the `--keep N` newest tags (by push time, or `--sort semver`/`name`), keep
+  tags pushed within `--older-than`, or select `--all`; `--match` limits the candidates, and
+  `--exclude` plus the `docker.exclude` setting (default `latest`) protect tags. The plan is shown
+  before a confirmation, which scripts answer with `--yes`.
+* Tags pushed in the last seconds are not in the search index yet: they are listed without a push
+  time, and retention rules never delete them.
+* Deleted tags free no storage by themselves: the Nexus tasks *Docker - Delete unused manifests and
+  images* and *Admin - Compact blob store* reclaim it (`nexr gc` will run them).
+
 ## Commands
 
 | Command | Description |
@@ -125,14 +171,17 @@ $ nexr rm -r raw-releases/myapp/1.3.0/ --dry-run
 | `nexr up SRC... REPO[/PATH]` | Upload files and directory trees to a hosted raw repository (`--dry-run`, `--skip-existing`, `--verify`). |
 | `nexr down REPO/PATH [DEST]` | Download a file or a directory tree; `-` writes a file to stdout. |
 | `nexr rm REPO/PATH...` | Delete files, or directories with `-r` (`--dry-run`, `--yes`, `--ignore-missing`). |
+| `nexr docker ls` | List the images of a docker or oci repository (`-l` tag counts and last push, `--match`). |
+| `nexr docker tags IMAGE[:TAG]` | List tags with digests, push times and sizes (`--sort pushed\|semver\|name`, `-l`, `--match`). |
+| `nexr docker rm IMAGE:TAG...` | Delete tags. |
+| `nexr docker rm IMAGE --keep N` | Delete tags by a retention rule (`--keep`, `--older-than`, `--all`, `--match`, `--exclude`, `--sort`, `--dry-run`). |
 | `nexr config view` | Show the effective settings and where each comes from. Passwords are always redacted. |
 | `nexr config path` | Print the location of the config file. |
 | `nexr config profiles` | List the profiles of the config file. |
 | `nexr version` | Print version information (`--json` supported). |
 | `nexr completion SHELL` | Print a completion script for bash, zsh, fish or PowerShell. |
 
-Planned: `nexr docker ls`, `tags` and `rm` with retention rules (`--keep N`, `--older-than`);
-`nexr gc` and `nexr tasks` for cleanup tasks; `nexr api` for any REST call. The
+Planned: `nexr gc` and `nexr tasks` for cleanup tasks, and `nexr api` for any REST call. The
 [specification](docs/specification.md) describes them in detail.
 
 Global flags work with every command:
@@ -191,6 +240,27 @@ A profile takes its password from exactly one of `password_env`, `password_file`
 `password_command` (a command that prints the password, such as `pass show nexus/prod`) or
 `password` (plain text; `nexr` warns if the file is readable by others).
 
+Settings of the `nexr docker` commands:
+
+```yaml
+profiles:
+  prod:
+    url: https://nexus.example.com
+    docker:
+      repository: docker-hosted          # default for -R/--repo (env NEXR_DOCKER_REPO)
+      exclude: [latest, "release-*"]     # tags that retention rules never delete (default: [latest])
+      registry_urls:                     # where the Registry API of a repository is served
+        docker-hosted: https://registry.example.com
+```
+
+`nexr` reads tags through the Registry API of a repository, by default at
+`<url>/repository/REPO/v2/`. When a reverse proxy serves a repository's registry elsewhere (for
+example `https://registry.example.com/v2/` forwarded to `/repository/docker-hosted/v2/`), or a
+Docker connector port does (`https://nexus.example.com:8443`), set that endpoint in
+`docker.registry_urls`, with `NEXR_DOCKER_REGISTRY_URL` or with `--registry-url`. The endpoint gets
+the TLS settings and the credentials of the profile. Image references may then start with the
+registry host, as for `docker pull`: `nexr docker tags registry.example.com/team/app`.
+
 Environment variables:
 
 | Variable | Meaning |
@@ -201,14 +271,17 @@ Environment variables:
 | `NEXUS_CA_CERT`, `NEXUS_INSECURE` | Extra trusted CA bundle (PEM); `true` skips TLS verification. |
 | `NEXUS_CLIENT_CERT`, `NEXUS_CLIENT_KEY` | Client certificate and key (PEM) for mutual TLS. |
 | `NEXR_CONFIG`, `NEXR_PROFILE` | Config file and profile. |
+| `NEXR_DOCKER_REPO` | Repository of the `nexr docker` commands. |
+| `NEXR_DOCKER_REGISTRY_URL` | Registry endpoint of that repository. |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy settings. |
 | `NO_COLOR` | Disables colour. |
 
 **Credentials go only to the server they belong to.** Credentials from a source are used only with a
 URL from the same source or from a lower-precedence one. For example, `NEXUS_USER` and
 `NEXUS_PASSWORD` are used with the URL from the config file (the typical CI setup), but not with a
-different URL given by `--url` or by an explicitly selected profile. `nexr config view` shows every
-setting with its source, and `-v` reports credentials that were left out.
+different URL given by `--url` or by an explicitly selected profile. Registry endpoints follow the
+same rule, because they receive the credentials. `nexr config view` shows every setting with its
+source, and `-v` reports credentials and endpoints that were left out.
 
 ## Output and exit codes
 
@@ -259,6 +332,11 @@ nexr completion powershell | Out-String | Invoke-Expression
   that use the account, fix the password, and wait, or ask an administrator to update the user,
   which lifts the block at once. `nexr` never retries this error.
 * `nexr config view` shows which setting comes from where.
+* **A tag just pushed has no push time**, or a deleted tag still shows up for a moment: the search
+  index of Nexus follows pushes and deletions after a few seconds.
+* **`nexr docker` warns that the registry endpoint failed**: check `--registry-url`,
+  `NEXR_DOCKER_REGISTRY_URL` or `docker.registry_urls`. Without a working endpoint, `nexr` lists
+  images and tags from the search index and the components.
 * `nexr -v …` logs every HTTP request; `-vv` adds headers and truncated bodies. Passwords and
   cookies are redacted.
 * Error messages include the Nexus fault ID when the server reports one; administrators can look it

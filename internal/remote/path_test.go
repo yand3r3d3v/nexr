@@ -2,6 +2,7 @@ package remote
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,52 @@ func TestLocalPath(t *testing.T) {
 	for _, rel := range []string{"console.txt", "com10", "auxiliary", "a b.txt"} {
 		if _, err := localPath(dest, rel, "windows"); err != nil {
 			t.Errorf("localPath(%q) on Windows: %v", rel, err)
+		}
+	}
+}
+
+func TestParseImageRef(t *testing.T) {
+	for _, tt := range []struct {
+		in             string
+		host, name, tg string
+	}{
+		{"team/app", "", "team/app", ""},
+		{"team/app:1.0", "", "team/app", "1.0"},
+		{"app:latest", "", "app", "latest"},
+		{"x/a-b_c.d/e__f:V1_x.y-z", "", "x/a-b_c.d/e__f", "V1_x.y-z"},
+		{"a.b/app", "a.b", "app", ""}, // a dot makes the first component a host, as for docker
+		{"registry.example.com/team/app:1.0", "registry.example.com", "team/app", "1.0"},
+		{"localhost:5000/app", "localhost:5000", "app", ""},
+		{"localhost/app:2", "localhost", "app", "2"},
+		{"reg:8443/app", "reg:8443", "app", ""},
+	} {
+		r, err := ParseImageRef(tt.in)
+		if err != nil || r.Host != tt.host || r.Name != tt.name || r.Tag != tt.tg {
+			t.Errorf("%s: %+v, %v", tt.in, r, err)
+			continue
+		}
+		if r.String() != tt.in {
+			t.Errorf("%s: String() = %s", tt.in, r.String())
+		}
+	}
+	for in, msg := range map[string]string{
+		"Team/App":                             "lower-case",
+		"team/app@sha256:abc":                  "digest",
+		"team/app:":                            "invalid tag",
+		"team/app:-x":                          "invalid tag",
+		"team//app":                            "each component",
+		"team/app-":                            "each component",
+		"registry.example.com/":                "no image name",
+		"":                                     "no image name",
+		"team/app:" + strings.Repeat("x", 129): "invalid tag",
+	} {
+		if _, err := ParseImageRef(in); err == nil || !strings.Contains(err.Error(), msg) {
+			t.Errorf("%q: %v, want %q", in, err, msg)
+		}
+	}
+	for s, want := range map[string]bool{"team/*": true, "re:^x": true, "a?": true, "[ab]": true, "team/app": false} {
+		if IsPattern(s) != want {
+			t.Errorf("IsPattern(%q) != %v", s, want)
 		}
 	}
 }

@@ -53,10 +53,16 @@ type Server struct {
 	writable    bool
 	repos       map[string]Repo
 	files       map[string]map[string]*storedFile // repository → path → file
+	images      map[string]map[string]*storedTag  // repository → "name:tag" → tag
 	seq         int
 	clock       func() time.Time
 	noBrowse    bool
 	requests    []string
+
+	noImageAttrs bool
+	legacyLinks  bool
+	bearerRealm  bool
+	hook         func(r *http.Request) // runs before each request, without the lock
 }
 
 // Option configures a Server.
@@ -78,6 +84,12 @@ func WithAuthRateLimit(maxAttempts int) Option {
 // (3.71) do.
 func WithoutBrowseAPI() Option {
 	return func(s *Server) { s.noBrowse = true }
+}
+
+// WithHook runs fn before each request is handled. fn may change the state of
+// the server, e.g. to simulate a concurrent push.
+func WithHook(fn func(r *http.Request)) Option {
+	return func(s *Server) { s.hook = fn }
 }
 
 // WithClock sets the clock used for the timestamps of stored files.
@@ -106,6 +118,7 @@ func New(t testing.TB, opts ...Option) *Server {
 		readable: true, writable: true,
 		repos:       map[string]Repo{},
 		files:       map[string]map[string]*storedFile{},
+		images:      map[string]map[string]*storedTag{},
 		maxAttempts: 3,
 		failures:    map[string]int{},
 	}
@@ -158,6 +171,9 @@ func (s *Server) Requests() []string {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if s.hook != nil {
+		s.hook(r)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests = append(s.requests, r.Method+" "+r.URL.Path)
@@ -169,7 +185,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(r.URL.Path, s.contextPath+"/repository/") {
+		if repo, path, ok := s.contentPath(r); ok && isImageRepo(s.repos[repo]) &&
+			(path == "v2" || strings.HasPrefix(path, "v2/")) {
+			s.registry(w, r, repo, path)
+			return
+		}
 		s.content(w, r)
+		return
+	}
+	if r.URL.Path == s.contextPath+"/v2/token" {
+		s.token(w, r)
 		return
 	}
 	path, ok := strings.CutPrefix(r.URL.Path, s.contextPath+"/service/rest")
@@ -212,6 +237,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.authenticate(w, r); ok {
 			s.searchAssets(w, r)
 		}
+	case path == "/v1/search":
+		if _, ok := s.authenticate(w, r); ok {
+			s.searchComponents(w, r)
+		}
+	case path == "/v1/components":
+		if _, ok := s.authenticate(w, r); ok {
+			s.listComponents(w, r)
+		}
 	case strings.HasPrefix(path, "/v1/repositories/"):
 		u, ok := s.authenticate(w, r)
 		if !ok {
@@ -243,6 +276,8 @@ func (s *Server) modify(w http.ResponseWriter, r *http.Request, path string) {
 	switch {
 	case r.Method == http.MethodDelete && len(parts) == 3 && parts[0] == "v1" && parts[1] == "assets":
 		s.deleteAsset(w, u, parts[2])
+	case r.Method == http.MethodDelete && len(parts) == 3 && parts[0] == "v1" && parts[1] == "components":
+		s.deleteComponent(w, u, parts[2])
 	case r.Method == http.MethodDelete && len(parts) == 4 && parts[1] == "repositories" && parts[3] == "browse":
 		s.deleteFolder(w, r, u, parts[2])
 	case r.Method == http.MethodPost && path == "/v1/components":

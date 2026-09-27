@@ -11,6 +11,7 @@ import (
 	"github.com/yand3r3d3v/nexr/internal/buildinfo"
 	"github.com/yand3r3d3v/nexr/internal/cli/cmdutil"
 	"github.com/yand3r3d3v/nexr/internal/cli/configcmd"
+	"github.com/yand3r3d3v/nexr/internal/cli/dockercmd"
 	"github.com/yand3r3d3v/nexr/internal/cli/filescmd"
 	"github.com/yand3r3d3v/nexr/internal/cli/reposcmd"
 	"github.com/yand3r3d3v/nexr/internal/cli/statuscmd"
@@ -81,6 +82,7 @@ flags. Run "nexr status" to check the connection.`,
 
 	cmd.AddCommand(filescmd.New(f)...)
 	cmd.AddCommand(
+		dockercmd.New(f),
 		reposcmd.New(f),
 		statuscmd.New(f),
 		configcmd.New(f),

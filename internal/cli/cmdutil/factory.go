@@ -18,6 +18,7 @@ import (
 	"github.com/yand3r3d3v/nexr/internal/httpx"
 	"github.com/yand3r3d3v/nexr/internal/nexus"
 	"github.com/yand3r3d3v/nexr/internal/output"
+	"github.com/yand3r3d3v/nexr/internal/registry"
 )
 
 // GlobalFlags are the flags available on every command.
@@ -156,21 +157,7 @@ func (f *Factory) Nexus() (*nexus.Client, error) {
 			f.nexusErr = err
 			return
 		}
-		opts := httpx.Options{
-			Insecure:   cfg.TLSInsecure.Value,
-			CAFile:     cfg.CAFile.Value,
-			ClientCert: cfg.ClientCert.Value,
-			ClientKey:  cfg.ClientKey.Value,
-			Retries:    cfg.Retries.Value,
-			UserAgent:  buildinfo.UserAgent(),
-			Username:   cfg.User.Value,
-			Password:   cfg.Password,
-			AuthURLs:   []string{cfg.URL.Value},
-			Logger:     f.Logger(),
-			LogDetails: f.Flags.Verbose > 1,
-			Transport:  f.Transport,
-		}
-		hc, err := httpx.NewClient(opts)
+		hc, err := httpx.NewClient(f.httpOptions(cfg, cfg.URL.Value))
 		if err != nil {
 			f.nexusErr = err
 			return
@@ -178,12 +165,75 @@ func (f *Factory) Nexus() (*nexus.Client, error) {
 		if cfg.TLSInsecure.Value {
 			f.IO.Warnf("TLS certificate verification is disabled (from %s)", cfg.TLSInsecure.Origin)
 		}
-		if u, err := url.Parse(cfg.URL.Value); err == nil && u.Scheme == "http" && cfg.User.Set && !isLoopback(u.Hostname()) {
-			f.IO.Warnf("credentials are sent over plain HTTP to %s", u.Host)
-		}
+		f.warnPlainHTTP(cfg, cfg.URL.Value)
 		f.nexus, f.nexusErr = nexus.New(cfg.URL.Value, hc, cfg.Timeout.Value)
 	})
 	return f.nexus, f.nexusErr
+}
+
+// httpOptions returns the HTTP client options of the configuration; authURLs
+// are the base URLs that receive the credentials.
+func (f *Factory) httpOptions(cfg *config.Resolved, authURLs ...string) httpx.Options {
+	return httpx.Options{
+		Insecure:   cfg.TLSInsecure.Value,
+		CAFile:     cfg.CAFile.Value,
+		ClientCert: cfg.ClientCert.Value,
+		ClientKey:  cfg.ClientKey.Value,
+		Retries:    cfg.Retries.Value,
+		UserAgent:  buildinfo.UserAgent(),
+		Username:   cfg.User.Value,
+		Password:   cfg.Password,
+		AuthURLs:   authURLs,
+		Logger:     f.Logger(),
+		LogDetails: f.Flags.Verbose > 1,
+		Transport:  f.Transport,
+	}
+}
+
+func (f *Factory) warnPlainHTTP(cfg *config.Resolved, target string) {
+	if u, err := url.Parse(target); err == nil && u.Scheme == "http" && cfg.User.Set && !isLoopback(u.Hostname()) {
+		f.IO.Warnf("credentials are sent over plain HTTP to %s", u.Host)
+	}
+}
+
+// Registry returns a client for the Docker Registry API of a repository and
+// where its endpoint comes from: flagURL (--registry-url) when given, else the
+// configured endpoint (spec FR-NET-3), else <url>/repository/REPO/. Requests
+// to the endpoint use the TLS settings and the credentials of the profile.
+func (f *Factory) Registry(repo, flagURL string) (*registry.Client, config.Setting[string], error) {
+	var endpoint config.Setting[string]
+	cfg, err := f.Config()
+	if err != nil {
+		return nil, endpoint, err
+	}
+	if err := cfg.RequireURL(); err != nil {
+		return nil, endpoint, err
+	}
+	endpoint, notes := cfg.RegistryURL(repo)
+	if flagURL != "" {
+		u, err := config.NormalizeURL(flagURL)
+		if err != nil {
+			return nil, endpoint, errs.Wrap(errs.KindUsage, err, "invalid --registry-url")
+		}
+		endpoint, notes = config.Setting[string]{Value: u, Origin: "flag --registry-url", Set: true}, nil
+	}
+	if f.Flags.Verbose > 0 {
+		for _, n := range notes {
+			f.IO.Warnf("%s (credential scoping, see \"nexr config view\")", n)
+		}
+	}
+	if !endpoint.Set {
+		endpoint = config.Setting[string]{Value: cfg.URL.Value + "/repository/" + url.PathEscape(repo) + "/", Origin: "default"}
+	}
+	hc, err := httpx.NewClient(f.httpOptions(cfg, cfg.URL.Value, endpoint.Value))
+	if err != nil {
+		return nil, endpoint, err
+	}
+	if config.HostOf(endpoint.Value) != config.HostOf(cfg.URL.Value) {
+		f.warnPlainHTTP(cfg, endpoint.Value)
+	}
+	c, err := registry.New(endpoint.Value, hc, cfg.Timeout.Value)
+	return c, endpoint, err
 }
 
 func isLoopback(host string) bool {
@@ -194,26 +244,38 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// DecorateError adds configuration-specific hints to authentication errors.
+// DecorateError adds configuration-specific hints to authentication errors
+// of the REST API and the Registry API.
 func (f *Factory) DecorateError(err error) error {
+	if err == nil || f.cfg == nil {
+		return err
+	}
+	var status int
+	var throttled bool
 	var apiErr *nexus.APIError
-	if err == nil || f.cfg == nil || !errors.As(err, &apiErr) {
+	var regErr *registry.Error
+	switch {
+	case errors.As(err, &apiErr):
+		status, throttled = apiErr.StatusCode, apiErr.AuthThrottled
+	case errors.As(err, &regErr):
+		status, throttled = regErr.StatusCode, regErr.AuthThrottled
+	default:
 		return err
 	}
 	noUser := !f.cfg.User.Set
 	e := errs.Wrap(errs.KindAuth, err, "")
 	switch {
-	case apiErr.AuthThrottled:
+	case throttled:
 		if f.cfg.HasPassword() {
 			e.WithHint("check the password (from %s) first", f.cfg.PasswordOrigin())
 		}
 		return e
-	case apiErr.StatusCode == http.StatusUnauthorized && noUser:
+	case status == http.StatusUnauthorized && noUser:
 		e.ReplaceHints().WithHint("no credentials are configured and anonymous access is not allowed; set NEXUS_USER and NEXUS_PASSWORD or use a profile")
-	case apiErr.StatusCode == http.StatusForbidden && noUser:
+	case status == http.StatusForbidden && noUser:
 		// Nexus 3.71 answers 403 instead of 401 when anonymous access is disabled.
 		e.ReplaceHints().WithHint("no credentials are configured, and anonymous access does not allow this; set NEXUS_USER and NEXUS_PASSWORD or use a profile")
-	case apiErr.StatusCode != http.StatusUnauthorized:
+	case status != http.StatusUnauthorized:
 		return err
 	}
 	for _, d := range f.cfg.DroppedCredentials {

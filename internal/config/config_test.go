@@ -496,3 +496,89 @@ func TestInsecureFromEnv(t *testing.T) {
 		t.Fatalf("insecure = %+v", r.TLSInsecure)
 	}
 }
+
+// FR-NET-3: the endpoint of a repository follows the precedence of §5.1, and
+// endpoints that may belong to another server are ignored.
+func TestRegistryURLPrecedence(t *testing.T) {
+	path := writeConfig(t, testFile)
+	registry := func(e env, profile, repo string) (Setting[string], []string) {
+		t.Helper()
+		o := baseOpts(path, e)
+		o.Profile = profile
+		return resolve(t, o).RegistryURL(repo)
+	}
+	override := "https://override.example.com"
+	for _, tt := range []struct {
+		name          string
+		env           env
+		profile, repo string
+		want, origin  string
+		note          string
+	}{
+		{name: "file", repo: "docker-hosted", want: "https://registry.example.com", origin: "file"},
+		{name: "default", repo: "docker-other"},
+		{name: "profile not selected", repo: "docker-staging"},
+		{name: "env over file", env: env{"NEXR_DOCKER_REGISTRY_URL": override}, repo: "docker-hosted",
+			want: override, origin: "env NEXR_DOCKER_REGISTRY_URL"},
+		{name: "env for any repository", env: env{"NEXR_DOCKER_REGISTRY_URL": override + "/"}, repo: "docker-other",
+			want: override, origin: "env NEXR_DOCKER_REGISTRY_URL"},
+		{name: "explicit profile", profile: "staging", repo: "docker-staging",
+			want: "https://registry-staging.example.com", origin: "profile staging"},
+		{name: "explicit profile over env", env: env{"NEXR_DOCKER_REGISTRY_URL": override, "NEXUS_URL": "https://staging.example.com/nexus"},
+			profile: "staging", repo: "docker-staging", want: "https://registry-staging.example.com", origin: "profile staging"},
+		{name: "env with the profile's URL", env: env{"NEXR_DOCKER_REGISTRY_URL": override, "NEXUS_URL": "https://staging.example.com/nexus"},
+			profile: "staging", repo: "docker-other", want: override, origin: "env NEXR_DOCKER_REGISTRY_URL"},
+		{name: "env of another server", env: env{"NEXR_DOCKER_REGISTRY_URL": override},
+			profile: "staging", repo: "docker-other", note: "ignored the registry URL https://override.example.com from env NEXR_DOCKER_REGISTRY_URL"},
+		{name: "file of another server", env: env{"NEXUS_URL": "https://other.example.com"}, repo: "docker-hosted",
+			note: "it belongs to https://prod.example.com, but the URL https://other.example.com comes from env NEXUS_URL"},
+		{name: "file of the same server", env: env{"NEXUS_URL": "https://PROD.example.com/"}, repo: "docker-hosted",
+			want: "https://registry.example.com", origin: "file"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, notes := registry(tt.env, tt.profile, tt.repo)
+			if got.Value != tt.want || got.Set != (tt.want != "") || (tt.origin != "" && got.Origin != tt.origin) {
+				t.Errorf("RegistryURL = %+v, want %s from %s", got, tt.want, tt.origin)
+			}
+			if tt.note == "" && len(notes) > 0 || tt.note != "" && (len(notes) != 1 || !strings.Contains(notes[0], tt.note)) {
+				t.Errorf("notes = %q, want %q", notes, tt.note)
+			}
+		})
+	}
+}
+
+func TestRepositoriesForHost(t *testing.T) {
+	path := writeConfig(t, testFile)
+	r := resolve(t, baseOpts(path, env{"NEXR_DOCKER_REGISTRY_URL": "http://localhost:5000"}))
+	if repos, sel, _ := r.RepositoriesForHost("REGISTRY.example.com"); len(repos) != 1 || repos[0] != "docker-hosted" || sel {
+		t.Errorf("registry.example.com: %q, %v", repos, sel)
+	}
+	if repos, sel, _ := r.RepositoriesForHost("localhost:5000"); len(repos) != 0 || !sel {
+		t.Errorf("localhost:5000: %q, %v", repos, sel)
+	}
+	if repos, sel, _ := r.RepositoriesForHost("unknown.example.com"); len(repos) != 0 || sel {
+		t.Errorf("unknown: %q, %v", repos, sel)
+	}
+	other := resolve(t, baseOpts(path, env{"NEXUS_URL": "https://other.example.com"}))
+	if repos, _, notes := other.RepositoriesForHost("registry.example.com"); len(repos) != 0 || len(notes) != 1 {
+		t.Errorf("ignored endpoint: %q, %q", repos, notes)
+	}
+	if HostOf("https://Reg.example.com:443/x") != "reg.example.com" || HostOf("http://reg:8080") != "reg:8080" {
+		t.Error("HostOf")
+	}
+
+	if _, err := Resolve(baseOpts(path, env{"NEXR_DOCKER_REGISTRY_URL": "registry.example.com"})); errs.Classify(err) != errs.KindConfig {
+		t.Errorf("invalid NEXR_DOCKER_REGISTRY_URL: %v", err)
+	}
+
+	view := map[string]Entry{}
+	for _, e := range r.Entries() {
+		view[e.Key] = e
+	}
+	if e := view["docker.registry_urls.docker-hosted"]; e.Value != "https://registry.example.com" || e.Origin != "file" {
+		t.Errorf("view entry %+v", e)
+	}
+	if e := view["docker.registry_url"]; e.Value != "http://localhost:5000" || e.Origin != "env NEXR_DOCKER_REGISTRY_URL" {
+		t.Errorf("view entry %+v", e)
+	}
+}

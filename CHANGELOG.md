@@ -9,6 +9,18 @@ JSON output may change between minor versions.
 
 ### Added
 
+- `nexr docker ls`: list the images of docker and oci repositories, with tag counts and last
+  pushes (`-l`); falls back to the components when the registry endpoint fails.
+- `nexr docker tags`: list tags with digest, push time, size, platform, build time, last pull and
+  uploader; tags not indexed yet are included; sort by push time, version or name.
+- `nexr docker rm`: delete tags by name, or by retention rules (`--keep`, `--older-than`, `--all`,
+  `--match`, `--exclude`, `docker.exclude`, `--sort pushed|semver|name`) with a plan, dry runs and
+  confirmation. Only the tag is deleted; tags of the same manifest and the manifests of multi-arch
+  images stay. A tag pushed again after the plan was made is skipped.
+- Registry endpoints per repository (`--registry-url`, `NEXR_DOCKER_REGISTRY_URL`,
+  `docker.registry_urls`) for reverse proxies and Docker connectors, subject to credential scoping;
+  image references may start with a configured registry host.
+- `nexr config view` shows each registry endpoint with its source.
 - `nexr ls`: list raw (and other) repositories by path, one level or recursively (`-r`), with
   sizes, times and checksums (`-l`, `--json`), name-prefix matching and sorting.
 - `nexr up`: upload files, directory trees and stdin to hosted raw repositories, in parallel, with

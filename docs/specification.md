@@ -191,7 +191,8 @@ instead of comparing version numbers.
 | Task create, update and delete API | absent (`405`) | present | `nexr gc --create-missing` only where supported. |
 | Task `properties` in task listings | absent | present | Filtering tasks by repository or blob store only where exposed. |
 | System tasks *Admin - Cleanup unused asset blobs* (`assetBlob.cleanup`) | present | present | `nexr gc` runs them between Docker GC and compaction. |
-| Docker image attributes (created, OS/arch, total size) | absent | present | Optional columns, shown when available. |
+| Docker image attributes (created, OS/arch, total size) | absent | present | Optional columns, shown when available. For an index they describe one platform only and are not shown. |
+| `docker.totalSize` | — | a number of bytes in search results, a rounded string (`"2.10 MB"`) in `GET /v1/assets` | Read from search results; strings are parsed as a fallback. |
 | Asset `blobCreated`, `blobStoreName` | `null` | set | Optional fields; retention uses `lastModified`, which both provide. |
 | Docker Registry API under `/repository/<repo>/v2/` | yes | yes | Default registry endpoint (§3.4). |
 | Registry pagination `Link` header on that path | points to `/v2/…` without the repository prefix (unusable) | correct | `Link` URLs are never followed; the next request is rebuilt from `n` and `last`. |
@@ -216,14 +217,18 @@ path, `https://example.com/nexus`. Every endpoint is derived from it:
 * `docker.registry_urls` in the config file or a profile: a map from repository name to registry
   URL.
 
-These sources follow the precedence rules of §5.1.
+These sources follow the precedence rules of §5.1. `--registry-url` and `NEXR_DOCKER_REGISTRY_URL`
+apply to the repository the command works on.
 
 Example: a reverse proxy forwards `https://registry.example.com/v2/…` to
 `https://registry.example.com/repository/docker-hosted/v2/…`. It is configured with
 `docker.registry_urls: {docker-hosted: https://registry.example.com}`. An override may also point
 to a Docker connector (`https://nexus.example.com:8443`). Requests to the registry endpoint use the
 profile's TLS settings and credentials, because the user configured that endpoint explicitly for the
-profile.
+profile. Because the endpoint receives the credentials, the scoping rule FR-CFG-2 applies to it: an
+endpoint from a source with lower precedence than the Nexus URL is ignored, unless that source
+names the same Nexus URL (for example, the endpoints of the config file are ignored when
+`NEXUS_URL` points to another server). `-v` reports ignored endpoints.
 
 ---
 
@@ -274,9 +279,12 @@ profile, the `NEXR_DOCKER_REPO` environment variable, then the config file. If i
 the command fails with a usage error that lists the docker/oci repositories visible to the user.
 
 **FR-IMGREF-3 (S).** An image reference MAY start with a registry host, exactly as it is used with
-`docker pull` (`registry.example.com/team/app:1.0`). The host is matched against the hosts of the
-configured registry URLs (FR-NET-3), which selects the repository. A host that matches no configured
-registry URL is a usage error with a hint.
+`docker pull` (`registry.example.com/team/app:1.0`). As for docker, a first component that contains
+`.` or `:`, or is `localhost`, is a host. The host is matched against the hosts of the configured
+registry URLs (FR-NET-3), which selects the repository; the endpoint of `--registry-url` or
+`NEXR_DOCKER_REGISTRY_URL` selects the repository the command works on. A host that matches no
+configured registry URL, or several repositories without `-R`, is a usage error with a hint.
+References by digest (`@sha256:…`) are not supported.
 
 ### 4.4 Patterns and durations
 
@@ -768,10 +776,12 @@ accept `-R/--repo REPO` (FR-IMGREF-2) and `--registry-url URL` (FR-NET-3).
 API catalog (`GET <base>/repository/REPO/v2/_catalog`), following `Link` pagination. If the registry
 endpoint is unavailable, `nexr` falls back to deriving names from the Components API.
 
-**FR-DLS-2 (S).** `-l` adds the tag count and the most recent push time for each image.
+**FR-DLS-2 (S).** `-l` adds the tag count and the most recent push time for each image, from one
+read of all components of the repository.
 
+Without `-l`, and with `-q`, the output is one name per line. `--match` filters the names (FR-PAT-1).
 JSON: `[{"repository": "docker-hosted", "name": "team/app", "tag_count": 3, "last_pushed": "…"}]`.
-Without `-l`, the fields `tag_count` and `last_pushed` are `null`. `-q` prints names only.
+Without `-l`, the fields `tag_count` and `last_pushed` are `null`.
 
 ### 6.7 `nexr docker tags`
 
@@ -780,8 +790,9 @@ nexr docker tags IMAGE [-R|--repo REPO] [--match PATTERN]
                      [--sort pushed|name|semver] [--reverse] [-l|--long]
 ```
 
-**FR-DTAGS-1 (M).** Lists the tags of `IMAGE` with metadata taken from the Search API (one component
-per tag, carrying the manifest asset):
+**FR-DTAGS-1 (M).** Lists the tags of `IMAGE` (with `IMAGE:TAG`, only that tag; a missing tag is
+exit code 5) with metadata taken from the Search API (one component per tag, carrying the manifest
+asset):
 
 | Field | Source | Availability |
 |---|---|---|
@@ -794,23 +805,37 @@ per tag, carrying the manifest asset):
 | created (build time) | asset `docker.created` | recent releases (3.96; not 3.71) |
 | size, OS/architecture | asset `docker.totalSize`, `docker.os`, `docker.architecture` | recent releases (3.96; not 3.71) |
 
-**FR-DTAGS-2 (M).** Tags are also read from the Registry API (`/v2/<name>/tags/list`). Tags that the
-search index does not contain yet (pushed seconds ago) are still listed, with unknown metadata.
+For an index (a multi-platform image), Nexus records the attributes of one of its platforms only, so
+size, OS and architecture are unknown (`null`) for it. A build time of year 1, which images built
+without a date report, is unknown too.
 
-**FR-DTAGS-3 (M).** Default order: newest push first. `--sort semver` orders tags that are valid
-SemVer (optionally prefixed with `v`) by version precedence and lists all other tags after them.
+**FR-DTAGS-2 (M).** Tags are also read from the Registry API (`/v2/<name>/tags/list`), which decides
+which tags exist: tags that the search index does not contain yet (pushed seconds ago) are listed
+with the digest and media type from a `HEAD` of their manifest and no push time, and tags deleted
+seconds ago that the index still lists are left out. If the registry endpoint fails, the search
+index alone is used, with a warning.
+
+**FR-DTAGS-3 (M).** Default order: newest push first (tags not indexed yet first). `--sort semver`
+orders tags that are versions by precedence, highest first, and lists all other tags after them,
+sorted by name. A version is SemVer, optionally prefixed with `v`, where the minor and patch numbers
+may be omitted and leading zeros are allowed (`1`, `1.2`, `v1.2.3`, `1.2.3-rc.1`, `2026.09.01`);
+`1.2` and `1.2.0` are equal. `--sort name` sorts by name, and `--reverse` reverses any order.
 
 ```
 $ nexr docker tags team/app
-TAG      DIGEST               PUSHED            SIZE
-latest   sha256:b7f3d86d6e84  2026-09-26 16:14  2.10 MB
-1.1      sha256:b7f3d86d6e84  2026-09-26 16:13  2.10 MB
-1.0      sha256:c64c687cbea9  2026-09-26 16:13  3.46 MB
+TAG     DIGEST               PUSHED            SIZE
+latest  sha256:b7f3d86d6e84  2026-09-26 16:14  2.1 MiB
+1.1     sha256:b7f3d86d6e84  2026-09-26 16:13  2.1 MiB
+1.0     sha256:c64c687cbea9  2026-09-26 16:13  3.3 MiB
+multi   sha256:ce64758a109e  2026-09-26 16:12  multi-arch
 ```
+
+`-l` adds the columns TYPE (image or index), PLATFORM, CREATED, LAST PULLED and UPLOADER; `-q`
+prints tag names only; `--match` filters tags.
 
 JSON: array of
 `{"repository", "image", "tag", "digest", "media_type", "pushed", "created", "last_pulled", "size", "os", "architecture", "uploader", "component_id"}`.
-`size` is reported as the server provides it (a string) or `null`.
+`size` is a number of bytes or `null`; unknown values are `null`.
 
 ### 6.8 `nexr docker rm`
 
@@ -826,8 +851,10 @@ retention flags: [--match PATTERN]... [--exclude PATTERN]... [--sort pushed|semv
 
 **FR-DRM-1 (M), explicit tags.** Each `IMAGE:TAG` is resolved to its component ID through the Search
 API (`name`, `version`) and deleted with `DELETE /v1/components/{id}`. Only that tag is removed.
-Other tags that point to the same digest are not affected (verified). A missing tag gives exit code
-5 unless `--ignore-missing` is set.
+Other tags that point to the same digest are not affected (verified). A tag that is not indexed yet
+is found through the Registry API and the components listing. A missing tag gives exit code 5
+unless `--ignore-missing` is set. Deleting more than one tag asks for confirmation (FR-SAFE-3); a
+single tag does not. `--match`, `--exclude` and `--sort` need a retention flag.
 
 **FR-DRM-2 (M), retention.** For a bare `IMAGE` with `--keep`, `--older-than` or `--all`, `nexr` computes
 a deletion plan:
@@ -836,15 +863,18 @@ a deletion plan:
 2. **Candidates:** the tags matching `--match` (all tags if it is not given).
 3. **Protected:** candidates matching any `--exclude` pattern or the configured `docker.exclude` list
    (default `["latest"]`). They are never deleted and **do not count** toward `N`.
-4. Order the remaining candidates by `--sort` (default `pushed`, newest first). With
-   `--sort semver`, tags that are not valid SemVer are never deleted and are reported as skipped.
-5. `--keep N` keeps the first `N` of them.
+4. Order the remaining candidates by `--sort`: `pushed` (the default, newest first), `semver`
+   (highest version first, FR-DTAGS-3) or `name` (last by name first, which suits date stamps such
+   as `build-20260926`). With `--sort semver`, tags that are not versions are never deleted and are
+   reported as skipped.
+5. `--keep N` keeps the first `N` of them (`N` ≥ 1; `--all` deletes every candidate).
 6. `--older-than D` additionally keeps every candidate pushed less than `D` ago.
 7. `--all` selects every non-protected candidate.
 8. Everything not kept is deleted.
 
 At least one of `--keep`, `--older-than` or `--all` is required; `--keep` and `--all` are mutually
-exclusive.
+exclusive. `IMAGE:TAG` cannot be combined with them. A retention deletion always asks for
+confirmation, which scripts give with `--yes` (FR-SAFE-3). An image named twice is planned once.
 
 Example: the tags `latest, v5, v4, v3, v2, v1` (newest first) with `--keep 2` keep `latest`
 (protected), `v5` and `v4`, and delete `v3`, `v2` and `v1`.
@@ -854,12 +884,16 @@ as decided in review (Q4). It is not the image build date, which can be fixed or
 reproducible builds.
 
 **FR-DRM-4 (M).** Tags pushed in the last seconds may not be in the search index yet (§3.3). They are
-never candidates, so eventual consistency can only make `nexr` delete *less*, never more.
+never candidates, so eventual consistency can only make `nexr` delete *less*, never more. For the
+same reason, before deleting a tag of a retention plan, `nexr` checks through the Registry API that
+the tag still points to the planned digest: a tag pushed again in the meantime is skipped with a
+warning, and a tag that is already gone is reported as missing; neither is a failure.
 
 **FR-DRM-5 (M).** `nexr docker rm` never deletes manifests referenced by digest (the children of
 multi-arch indexes and attestations). Unreferenced manifests and layers are cleaned up by the
-server-side Docker GC task (`nexr gc`). After a successful deletion `nexr` prints the reminder
-`hint: run "nexr gc" to reclaim storage`.
+server-side Docker GC task (`nexr gc`). After a successful deletion `nexr` prints a reminder that
+storage is reclaimed by the cleanup tasks (until `nexr gc` exists in M3, the hint names the Nexus
+tasks; afterwards it is `hint: run "nexr gc" to reclaim storage`).
 
 **FR-DRM-6 (M).** The plan is shown before confirmation and in `--dry-run` mode:
 
@@ -875,10 +909,20 @@ v1       2026-08-14 12:00  delete  beyond newest 2
 dry run: 3 of 6 tags would be deleted from docker-hosted/team/app
 ```
 
-JSON: `{"repository", "image", "dry_run", "decisions": [{"tag", "pushed", "action", "reason"}], "deleted": [...], "failed": [...], "summary": {...}}`.
+Without `--dry-run`, the plan is followed by the confirmation and then `deleted
+docker-hosted/team/app:v3` lines and a summary. `-q` prints only the tags that are (or would be)
+deleted.
 
-**FR-DRM-7 (C).** `IMAGE` MAY be a pattern (e.g. `'team/*'`). The policy is then applied to each
-matching image separately.
+JSON, for both modes:
+`{"dry_run", "images": [{"repository", "image", "decisions": [{"tag", "digest", "pushed", "action", "reason"}]}], "deleted": [...], "missing": [...], "skipped": [...], "failed": [...], "summary": {"deleted", "kept", "skipped", "missing", "failed", "duration_ms"}}`.
+`images` is empty for explicit tags; the entries of the lists are
+`{"repository", "image", "tag", "digest"}`, plus `reason` (skipped) or `error` (failed). In a dry
+run, `deleted` lists what would be deleted.
+
+**FR-DRM-7 (C).** `IMAGE` MAY be a pattern (e.g. `'team/*'`, a glob or `re:REGEX` matched against
+the image names of the catalog). The policy is then applied to each matching image separately.
+Images without tags (left in the catalog until the Docker cleanup task runs) are skipped, and a
+pattern that matches no image gives a warning, not an error.
 
 ### 6.9 `nexr gc`
 

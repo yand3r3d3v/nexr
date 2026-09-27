@@ -3,9 +3,12 @@ package nexus
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"iter"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,6 +28,21 @@ type Asset struct {
 	BlobCreated    time.Time // zero when unknown
 	LastDownloaded time.Time // zero when never downloaded
 	Uploader       string
+	// Image holds the attributes of docker and oci manifests; nil for other
+	// assets.
+	Image *ImageInfo
+}
+
+// ImageInfo holds what Nexus records about an image manifest. Only the digest
+// is always known: the other attributes exist on recent releases (3.96, not
+// 3.71) and only for the docker format. For an index they describe just one of
+// its platforms.
+type ImageInfo struct {
+	Digest       string    // "sha256:…"; empty when unknown
+	Created      time.Time // build time from the image config; zero when unknown or unset
+	OS           string
+	Architecture string
+	TotalSize    int64 // bytes of the config and layers; -1 when unknown
 }
 
 // Checksums of an asset, as hex strings. Empty values are unknown.
@@ -36,18 +54,28 @@ type Checksums struct {
 }
 
 type assetJSON struct {
-	ID             string    `json:"id"`
-	Repository     string    `json:"repository"`
-	Format         string    `json:"format"`
-	Path           string    `json:"path"`
-	DownloadURL    string    `json:"downloadUrl"`
-	ContentType    string    `json:"contentType"`
-	FileSize       int64     `json:"fileSize"`
-	Checksum       Checksums `json:"checksum"`
-	LastModified   jsonTime  `json:"lastModified"`
-	BlobCreated    jsonTime  `json:"blobCreated"`
-	LastDownloaded jsonTime  `json:"lastDownloaded"`
-	Uploader       string    `json:"uploader"`
+	ID             string     `json:"id"`
+	Repository     string     `json:"repository"`
+	Format         string     `json:"format"`
+	Path           string     `json:"path"`
+	DownloadURL    string     `json:"downloadUrl"`
+	ContentType    string     `json:"contentType"`
+	FileSize       int64      `json:"fileSize"`
+	Checksum       Checksums  `json:"checksum"`
+	LastModified   jsonTime   `json:"lastModified"`
+	BlobCreated    jsonTime   `json:"blobCreated"`
+	LastDownloaded jsonTime   `json:"lastDownloaded"`
+	Uploader       string     `json:"uploader"`
+	Docker         *imageJSON `json:"docker"`
+	OCI            *imageJSON `json:"oci"`
+}
+
+type imageJSON struct {
+	ContentDigest string    `json:"content_digest"`
+	Created       jsonTime  `json:"created"`
+	OS            string    `json:"os"`
+	Architecture  string    `json:"architecture"`
+	TotalSize     *byteSize `json:"totalSize"`
 }
 
 func (a assetJSON) asset() Asset {
@@ -58,7 +86,72 @@ func (a assetJSON) asset() Asset {
 		Checksum:     a.Checksum,
 		LastModified: a.LastModified.Time, BlobCreated: a.BlobCreated.Time, LastDownloaded: a.LastDownloaded.Time,
 		Uploader: a.Uploader,
+		Image:    a.image(),
 	}
+}
+
+func (a assetJSON) image() *ImageInfo {
+	if a.Format != "docker" && a.Format != "oci" {
+		return nil
+	}
+	info := &ImageInfo{TotalSize: -1}
+	if a.Checksum.SHA256 != "" {
+		info.Digest = "sha256:" + a.Checksum.SHA256
+	}
+	attrs := a.Docker
+	if attrs == nil {
+		attrs = a.OCI
+	}
+	if attrs == nil {
+		return info
+	}
+	if attrs.ContentDigest != "" {
+		info.Digest = attrs.ContentDigest
+	}
+	// Images built without a date (e.g. by crane or ko) report year 1.
+	if attrs.Created.Year() > 1 {
+		info.Created = attrs.Created.Time
+	}
+	info.OS, info.Architecture = attrs.OS, attrs.Architecture
+	if attrs.TotalSize != nil {
+		info.TotalSize = int64(*attrs.TotalSize)
+	}
+	return info
+}
+
+// byteSize is docker.totalSize: a number of bytes in search results, but a
+// rounded string such as "2.10 MB" (1024-based units) in GET /v1/assets.
+// Unknown values decode to -1.
+type byteSize int64
+
+func (b *byteSize) UnmarshalJSON(data []byte) error {
+	*b = -1
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err == nil {
+		if v, err := n.Int64(); err == nil {
+			*b = byteSize(v)
+		} else if f, err := n.Float64(); err == nil {
+			*b = byteSize(math.Round(f))
+		}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil
+	}
+	num, unit, _ := strings.Cut(strings.TrimSpace(s), " ")
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil || f < 0 {
+		return nil
+	}
+	exp := 0 // a bare number is bytes
+	if unit = strings.ToUpper(strings.TrimSpace(unit)); unit != "" {
+		if exp = strings.IndexByte("BKMGTP", unit[0]); exp < 0 {
+			return nil
+		}
+	}
+	*b = byteSize(math.Round(f * math.Pow(1024, float64(exp))))
+	return nil
 }
 
 // jsonTime is a timestamp that decodes leniently: null, an empty string or an

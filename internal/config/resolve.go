@@ -75,6 +75,9 @@ type Resolved struct {
 	// DroppedCredentials explains credentials ignored by the scoping rule.
 	DroppedCredentials []string
 
+	registryURLs map[string]registryEntry // repository → endpoint from the config file
+	registryEnv  *registryEntry           // NEXR_DOCKER_REGISTRY_URL
+
 	password     *passwordSource
 	getenv       func(string) string
 	stdin        io.Reader
@@ -277,9 +280,14 @@ func Resolve(opts Options) (*Resolved, error) {
 	r.Output = pick(layers, "output", func(s Settings) *string { return s.Output })
 	r.DockerRepository = pick(layers, "docker.repository", func(s Settings) *string { return s.Docker.Repository })
 	r.DockerExclude = pick(layers, "docker.exclude", func(s Settings) *[]string { return s.Docker.Exclude })
-	r.RegistryURLs = pickMap(layers, "docker.registry_urls")
+	r.RegistryURLs, r.registryURLs = pickRegistryURLs(layers)
 	if v := opts.Getenv("NEXR_DOCKER_REGISTRY_URL"); v != "" {
 		r.RegistryURLOverride = Setting[string]{Value: v, Origin: "env NEXR_DOCKER_REGISTRY_URL", Set: true}
+		for i, l := range layers {
+			if l.dom == domEnv {
+				r.registryEnv = &registryEntry{value: v, origin: r.RegistryURLOverride.Origin, rank: i, dom: domEnv}
+			}
+		}
 	}
 	r.UploadMethod = pick(layers, "upload.method", func(s Settings) *string { return s.Upload.Method })
 	r.GCWaitTimeout = pickDuration(layers, "gc.wait_timeout", func(s Settings) *Duration { return s.GC.WaitTimeout })
@@ -292,13 +300,16 @@ func Resolve(opts Options) (*Resolved, error) {
 		return nil, err
 	}
 	r.scopeCredentials(layers)
+	r.scopeRegistryURLs(layers)
 	return r, nil
 }
 
-// scopeCredentials applies the credential scoping rule (FR-CFG-2): credentials
-// are only combined with a URL from the same or a lower-precedence source,
-// unless both sources name the same URL.
-func (r *Resolved) scopeCredentials(layers []layer) {
+// scope returns a check of the scoping rule (FR-CFG-2): settings that belong
+// to a server, such as credentials, are only combined with a URL from the same
+// or a lower-precedence source, unless both sources name the same URL. When
+// the rule forbids it, target is the URL that the domain names ("no URL" if
+// none).
+func (r *Resolved) scope(layers []layer) func(d domain) (ok bool, target string) {
 	order := []domain{domDefault, domFile, domEnv, domFlag}
 	if r.ProfileExplicit {
 		order = []domain{domDefault, domEnv, domFile, domFlag}
@@ -326,22 +337,32 @@ func (r *Resolved) scopeCredentials(layers []layer) {
 		}
 		return "", false
 	}
-	allowed := func(l layer, what string) bool {
-		if !r.URL.Set || rank(l.dom) >= rank(urlDom) {
-			return true
+	return func(d domain) (bool, string) {
+		if !r.URL.Set || rank(d) >= rank(urlDom) {
+			return true, ""
 		}
-		du, ok := domainURL(l.dom)
+		du, ok := domainURL(d)
 		if ok && SameURL(du, r.URL.Value) {
-			return true
+			return true, ""
 		}
-		target := "no URL"
-		if ok {
-			target = du
+		if !ok {
+			return false, "no URL"
 		}
-		r.DroppedCredentials = append(r.DroppedCredentials, fmt.Sprintf(
-			"ignored %s from %s: it belongs to %s, but the URL %s comes from %s",
-			what, l.origin(what), target, r.URL.Value, r.URL.Origin))
-		return false
+		return false, du
+	}
+}
+
+// scopeCredentials applies the scoping rule to the user and the password.
+func (r *Resolved) scopeCredentials(layers []layer) {
+	check := r.scope(layers)
+	allowed := func(l layer, what string) bool {
+		ok, target := check(l.dom)
+		if !ok {
+			r.DroppedCredentials = append(r.DroppedCredentials, fmt.Sprintf(
+				"ignored %s from %s: it belongs to %s, but the URL %s comes from %s",
+				what, l.origin(what), target, r.URL.Value, r.URL.Origin))
+		}
+		return ok
 	}
 	for i := len(layers) - 1; i >= 0; i-- {
 		l := layers[i]
@@ -399,10 +420,20 @@ func (r *Resolved) validate() error {
 	if r.ClientCert.Set != r.ClientKey.Set {
 		return errs.Config("tls.client_cert and tls.client_key must be set together")
 	}
-	for repo, raw := range r.RegistryURLs.Value {
-		if _, err := NormalizeURL(raw); err != nil {
-			return errs.Wrap(errs.KindConfig, err, "invalid docker.registry_urls entry for %q", repo)
+	for repo, e := range r.registryURLs {
+		u, err := NormalizeURL(e.value)
+		if err != nil {
+			return errs.Wrap(errs.KindConfig, err, "invalid docker.registry_urls entry for %q (from %s)", repo, e.origin)
 		}
+		e.value = u
+		r.registryURLs[repo] = e
+	}
+	if e := r.registryEnv; e != nil {
+		u, err := NormalizeURL(e.value)
+		if err != nil {
+			return errs.Wrap(errs.KindConfig, err, "invalid NEXR_DOCKER_REGISTRY_URL")
+		}
+		e.value = u
 	}
 	return nil
 }
@@ -642,18 +673,119 @@ func pickDuration(layers []layer, key string, get func(Settings) *Duration) Sett
 	return Setting[time.Duration]{Value: s.Value.Duration, Origin: s.Origin, Set: s.Set}
 }
 
-func pickMap(layers []layer, key string) Setting[map[string]string] {
+// registryEntry is a registry endpoint with the source that set it.
+type registryEntry struct {
+	value   string
+	origin  string
+	rank    int    // position of the source in the layers; higher wins
+	dom     domain // domain of the source
+	dropped string // why the scoping rule ignores the entry
+}
+
+// pickRegistryURLs merges docker.registry_urls per repository: each entry
+// comes from the highest-precedence source that sets it.
+func pickRegistryURLs(layers []layer) (Setting[map[string]string], map[string]registryEntry) {
 	out := Setting[map[string]string]{Value: map[string]string{}}
-	for _, l := range layers {
+	entries := map[string]registryEntry{}
+	for i, l := range layers {
 		if len(l.s.Docker.RegistryURLs) == 0 {
 			continue
 		}
 		for k, v := range l.s.Docker.RegistryURLs {
 			out.Value[k] = v
+			entries[k] = registryEntry{value: v, origin: l.origin("docker.registry_urls"), rank: i, dom: l.dom}
 		}
-		out.Origin, out.Set = l.origin(key), true
+		out.Origin, out.Set = l.origin("docker.registry_urls"), true
 	}
-	return out
+	return out, entries
+}
+
+// scopeRegistryURLs applies the scoping rule to registry endpoints: an
+// endpoint from a source with lower precedence than the Nexus URL may belong
+// to another server.
+func (r *Resolved) scopeRegistryURLs(layers []layer) {
+	check := r.scope(layers)
+	drop := func(e *registryEntry, what string) {
+		if ok, target := check(e.dom); !ok {
+			e.dropped = fmt.Sprintf("ignored %s from %s: it belongs to %s, but the URL %s comes from %s",
+				what, e.origin, target, r.URL.Value, r.URL.Origin)
+		}
+	}
+	for repo, e := range r.registryURLs {
+		drop(&e, fmt.Sprintf("the registry URL %s of %s", e.value, repo))
+		r.registryURLs[repo] = e
+	}
+	if r.registryEnv != nil {
+		drop(r.registryEnv, "the registry URL "+r.registryEnv.value)
+	}
+}
+
+// RegistryURL returns the registry endpoint configured for a repository (spec
+// FR-NET-3): from an explicitly selected profile, NEXR_DOCKER_REGISTRY_URL
+// (which applies to the repository a command works on), or the config file,
+// in the order of precedence of §5.1. It is not Set when the default
+// <url>/repository/REPO/ applies; the --registry-url flag is up to the
+// caller. Notes explain endpoints that the scoping rule ignored.
+func (r *Resolved) RegistryURL(repo string) (endpoint Setting[string], notes []string) {
+	var cands []registryEntry
+	if e, ok := r.registryURLs[repo]; ok {
+		cands = append(cands, e)
+	}
+	if r.registryEnv != nil {
+		cands = append(cands, *r.registryEnv)
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rank > cands[j].rank })
+	for _, e := range cands {
+		if e.dropped != "" {
+			notes = append(notes, e.dropped)
+			continue
+		}
+		return Setting[string]{Value: e.value, Origin: e.origin, Set: true}, notes
+	}
+	return Setting[string]{}, notes
+}
+
+// RepositoriesForHost returns the repositories whose configured registry
+// endpoint is at host (host or host:port), for image references that start
+// with a registry host (FR-IMGREF-3). selected reports that the endpoint from
+// NEXR_DOCKER_REGISTRY_URL, which belongs to the selected repository, matches.
+// Notes explain matching endpoints that the scoping rule ignored.
+func (r *Resolved) RepositoriesForHost(host string) (repos []string, selected bool, notes []string) {
+	want := HostOf("//" + host)
+	for repo, e := range r.registryURLs {
+		switch {
+		case HostOf(e.value) != want:
+		case e.dropped != "":
+			notes = append(notes, e.dropped)
+		default:
+			repos = append(repos, repo)
+		}
+	}
+	sort.Strings(repos)
+	sort.Strings(notes)
+	if e := r.registryEnv; e != nil && HostOf(e.value) == want {
+		if e.dropped != "" {
+			notes = append(notes, e.dropped)
+		} else {
+			selected = true
+		}
+	}
+	return repos, selected, notes
+}
+
+// HostOf returns the lower-case host[:port] of a URL, without a default port.
+// It accepts "//host:port" for a bare host.
+func HostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	switch {
+	case u.Scheme == "https" && strings.HasSuffix(host, ":443"), u.Scheme == "http" && strings.HasSuffix(host, ":80"):
+		host = host[:strings.LastIndex(host, ":")]
+	}
+	return host
 }
 
 func expandHome(p, home string) string {
