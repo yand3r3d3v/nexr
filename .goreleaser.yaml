@@ -1,0 +1,49 @@
+# Release configuration, see docs/architecture.md §9.2.
+# Check it with "goreleaser check"; build all targets with "make snapshot".
+version: 2
+project_name: nexr
+
+builds:
+  - main: ./cmd/nexr
+    binary: nexr
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/yand3r3d3v/nexr/internal/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  prerelease: auto

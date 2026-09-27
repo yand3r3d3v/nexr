@@ -1,0 +1,8 @@
+# Build output
+/bin/
+/dist/
+
+# Test output
+coverage.out
+coverage.html
+*.test
