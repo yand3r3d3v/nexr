@@ -130,25 +130,3 @@ func IsSkip(err error) bool {
 func IsMissing(err error) bool {
 	return statusOf(err) == http.StatusNotFound
 }
-
-// BulkError summarises the failures of a bulk operation (FR-EXIT-1): the
-// common category when every item failed alike, otherwise "partial".
-func BulkError(verb string, total int, failures []error) error {
-	if len(failures) == 0 {
-		return nil
-	}
-	kind := errs.Classify(failures[0])
-	same := len(failures) == total
-	for _, err := range failures[1:] {
-		if errs.Classify(err) != kind {
-			same = false
-		}
-	}
-	if total == 1 {
-		return failures[0]
-	}
-	if !same {
-		kind = errs.KindPartial
-	}
-	return errs.New(kind, "%d of %d %s failed", len(failures), total, verb)
-}

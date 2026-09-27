@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -579,25 +577,4 @@ func TestPlanAndRemove(t *testing.T) {
 			t.Fatalf("maven files must be deleted by asset ID: %s", r)
 		}
 	}
-}
-
-func TestBulkError(t *testing.T) {
-	notFound := errs.NotFound("x")
-	auth := &nexus.APIError{StatusCode: http.StatusForbidden}
-	if files.BulkError("uploads", 3, nil) != nil {
-		t.Fatal("no failures")
-	}
-	if err := files.BulkError("uploads", 1, []error{notFound}); !errors.Is(err, notFound) {
-		t.Fatalf("single item: %v", err)
-	}
-	if err := files.BulkError("deletions", 2, []error{notFound, notFound}); errs.Classify(err) != errs.KindNotFound || err.Error() != "2 of 2 deletions failed" {
-		t.Fatalf("all alike: %v", err)
-	}
-	if err := files.BulkError("deletions", 2, []error{notFound, auth}); errs.Classify(err) != errs.KindPartial {
-		t.Fatalf("mixed: %v", err)
-	}
-	if err := files.BulkError("uploads", 5, []error{notFound}); errs.Classify(err) != errs.KindPartial {
-		t.Fatalf("partial: %v", err)
-	}
-	var _ io.Reader // keep io for helpers
 }

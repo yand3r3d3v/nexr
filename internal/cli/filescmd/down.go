@@ -67,17 +67,17 @@ leave DEST or are not valid on this system are rejected.
 	fl.BoolVar(&opts.skipExisting, "skip-existing", false, "skip files that exist locally")
 	fl.BoolVar(&opts.noVerify, "no-verify", false, "do not check checksums")
 	fl.BoolVar(&opts.dryRun, "dry-run", false, "show what would be downloaded, without downloading")
-	addConcurrencyFlag(cmd, &opts.concurrency)
+	cmdutil.AddConcurrencyFlag(cmd, &opts.concurrency, "transfers")
 	return cmd
 }
 
 type downItemJSON struct {
-	Repository  string     `json:"repository"`
-	Path        string     `json:"path"`
-	Destination string     `json:"destination"`
-	Size        *int64     `json:"size"`
-	Reason      string     `json:"reason,omitempty"`
-	Error       *errorJSON `json:"error,omitempty"`
+	Repository  string             `json:"repository"`
+	Path        string             `json:"path"`
+	Destination string             `json:"destination"`
+	Size        *int64             `json:"size"`
+	Reason      string             `json:"reason,omitempty"`
+	Error       *cmdutil.ErrorJSON `json:"error,omitempty"`
 }
 
 type downJSON struct {
@@ -105,15 +105,15 @@ func runDown(cmd *cobra.Command, f *cmdutil.Factory, opts *downOptions, args []s
 	if dest == "-" && f.JSON() {
 		return errs.Usage("--json cannot be combined with downloading to stdout")
 	}
-	include, err := parsePatterns("--include", opts.include)
+	include, err := cmdutil.ParsePatterns("--include", opts.include)
 	if err != nil {
 		return err
 	}
-	exclude, err := parsePatterns("--exclude", opts.exclude)
+	exclude, err := cmdutil.ParsePatterns("--exclude", opts.exclude)
 	if err != nil {
 		return err
 	}
-	conc, err := concurrency(cmd, f, opts.concurrency)
+	conc, err := cmdutil.Concurrency(cmd, f, opts.concurrency)
 	if err != nil {
 		return err
 	}
@@ -170,7 +170,7 @@ func runDown(cmd *cobra.Command, f *cmdutil.Factory, opts *downOptions, args []s
 			return output.WriteJSON(f.IO.Out, result, f.IO.IsStdoutTTY())
 		}
 		if human {
-			fmt.Fprintf(f.IO.Out, "%s, %s would be downloaded (dry run)\n", count(len(plan.Items), "file"), output.HumanBytes(total))
+			fmt.Fprintf(f.IO.Out, "%s, %s would be downloaded (dry run)\n", cmdutil.Count(len(plan.Items), "file"), output.HumanBytes(total))
 		}
 		return nil
 	}
@@ -213,7 +213,7 @@ func runDown(cmd *cobra.Command, f *cmdutil.Factory, opts *downOptions, args []s
 		default:
 			failures = append(failures, err)
 			fj := itemJSON(j.item, j.item.Size)
-			e := itemError(err)
+			e := cmdutil.ItemError(err)
 			fj.Error = &e
 			result.Failed = append(result.Failed, fj)
 			if len(plan.Items) > 1 && !f.JSON() {
@@ -224,18 +224,18 @@ func runDown(cmd *cobra.Command, f *cmdutil.Factory, opts *downOptions, args []s
 	progress.Stop()
 	took := time.Since(start)
 	result.Summary = transferSummary{
-		Files: len(result.Downloaded), Bytes: received, Skipped: len(result.Skipped), Failed: len(result.Failed), DurationMS: ms(took),
+		Files: len(result.Downloaded), Bytes: received, Skipped: len(result.Skipped), Failed: len(result.Failed), DurationMS: cmdutil.Millis(took),
 	}
 	if f.JSON() {
 		if err := output.WriteJSON(f.IO.Out, result, f.IO.IsStdoutTTY()); err != nil {
 			return err
 		}
 	} else if human && len(plan.Items) > 1 {
-		fmt.Fprintf(f.IO.Out, "%s, %s downloaded in %s%s\n", count(len(result.Downloaded), "file"), output.HumanBytes(received),
-			elapsed(took), extraCounts(len(result.Skipped), len(result.Failed)))
+		fmt.Fprintf(f.IO.Out, "%s, %s downloaded in %s%s\n", cmdutil.Count(len(result.Downloaded), "file"), output.HumanBytes(received),
+			cmdutil.Elapsed(took), extraCounts(len(result.Skipped), len(result.Failed)))
 	}
-	if err := interrupted(ctx, notStarted); err != nil {
+	if err := cmdutil.Interrupted(ctx, notStarted, "files"); err != nil {
 		return err
 	}
-	return files.BulkError("downloads", len(plan.Items), failures)
+	return errs.Bulk("downloads", len(plan.Items), failures)
 }

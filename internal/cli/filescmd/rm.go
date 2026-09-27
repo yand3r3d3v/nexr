@@ -75,15 +75,15 @@ runs.
 	fl.DurationVar(&opts.waitTimeout, "wait-timeout", 10*time.Minute, "how long to wait for a server-side deletion")
 	fl.BoolVar(&opts.dryRun, "dry-run", false, "show what would be deleted, without deleting")
 	fl.BoolVarP(&opts.yes, "yes", "y", false, "do not ask for confirmation")
-	addConcurrencyFlag(cmd, &opts.concurrency)
+	cmdutil.AddConcurrencyFlag(cmd, &opts.concurrency, "deletions")
 	return cmd
 }
 
 type rmItemJSON struct {
-	Repository string     `json:"repository"`
-	Path       string     `json:"path"`
-	Type       string     `json:"type"`
-	Error      *errorJSON `json:"error,omitempty"`
+	Repository string             `json:"repository"`
+	Path       string             `json:"path"`
+	Type       string             `json:"type"`
+	Error      *cmdutil.ErrorJSON `json:"error,omitempty"`
 }
 
 type rmJSON struct {
@@ -108,15 +108,15 @@ func runRm(cmd *cobra.Command, f *cmdutil.Factory, opts *rmOptions, args []strin
 		}
 		targets = append(targets, t)
 	}
-	include, err := parsePatterns("--include", opts.include)
+	include, err := cmdutil.ParsePatterns("--include", opts.include)
 	if err != nil {
 		return err
 	}
-	exclude, err := parsePatterns("--exclude", opts.exclude)
+	exclude, err := cmdutil.ParsePatterns("--exclude", opts.exclude)
 	if err != nil {
 		return err
 	}
-	conc, err := concurrency(cmd, f, opts.concurrency)
+	conc, err := cmdutil.Concurrency(cmd, f, opts.concurrency)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func runRm(cmd *cobra.Command, f *cmdutil.Factory, opts *rmOptions, args []strin
 		err := errs.NotFound("%s not found", it.Ref())
 		failures = append(failures, err)
 		j := itemJSON(it)
-		e := itemError(err)
+		e := cmdutil.ItemError(err)
 		j.Error = &e
 		result.Failed = append(result.Failed, j)
 		if !f.JSON() && (len(plan.Items) > 1 || opts.dryRun) {
@@ -214,7 +214,7 @@ func runRm(cmd *cobra.Command, f *cmdutil.Factory, opts *rmOptions, args []strin
 			}
 			failures = append(failures, err)
 			j := itemJSON(it)
-			e := itemError(err)
+			e := cmdutil.ItemError(err)
 			j.Error = &e
 			result.Failed = append(result.Failed, j)
 			if total > 1 && !f.JSON() {
@@ -223,19 +223,19 @@ func runRm(cmd *cobra.Command, f *cmdutil.Factory, opts *rmOptions, args []strin
 		}
 	})
 	result.Summary.Deleted, result.Summary.Missing, result.Summary.Failed = len(result.Deleted), len(result.Missing), len(result.Failed)
-	result.Summary.DurationMS = ms(time.Since(start))
+	result.Summary.DurationMS = cmdutil.Millis(time.Since(start))
 	if f.JSON() {
 		if err := output.WriteJSON(f.IO.Out, result, f.IO.IsStdoutTTY()); err != nil {
 			return err
 		}
 	} else if human && total > 1 {
-		fmt.Fprintf(f.IO.Out, "%s deleted in %s%s\n", describe(deletedItems(result.Deleted)), elapsed(time.Since(start)),
+		fmt.Fprintf(f.IO.Out, "%s deleted in %s%s\n", describe(deletedItems(result.Deleted)), cmdutil.Elapsed(time.Since(start)),
 			extraCounts(0, len(result.Failed))+missingText(len(result.Missing)))
 	}
-	if err := interrupted(ctx, notStarted); err != nil {
+	if err := cmdutil.Interrupted(ctx, notStarted, "files"); err != nil {
 		return err
 	}
-	return files.BulkError("deletions", total, failures)
+	return errs.Bulk("deletions", total, failures)
 }
 
 func missingText(n int) string {

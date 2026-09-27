@@ -81,3 +81,23 @@ func TestUnknownKind(t *testing.T) {
 		t.Fatalf("unknown kind: exit %d, name %q", k.ExitCode(), k.String())
 	}
 }
+
+func TestBulk(t *testing.T) {
+	notFound := NotFound("x")
+	auth := New(KindAuth, "forbidden")
+	if Bulk("uploads", 3, nil) != nil {
+		t.Fatal("no failures")
+	}
+	if err := Bulk("uploads", 1, []error{notFound}); !errors.Is(err, notFound) {
+		t.Fatalf("single item: %v", err)
+	}
+	if err := Bulk("deletions", 2, []error{notFound, notFound}); Classify(err) != KindNotFound || err.Error() != "2 of 2 deletions failed" {
+		t.Fatalf("all alike: %v", err)
+	}
+	if err := Bulk("deletions", 2, []error{notFound, auth}); Classify(err) != KindPartial {
+		t.Fatalf("mixed: %v", err)
+	}
+	if err := Bulk("uploads", 5, []error{notFound}); Classify(err) != KindPartial {
+		t.Fatalf("partial: %v", err)
+	}
+}

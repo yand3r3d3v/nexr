@@ -79,17 +79,17 @@ and retried after network errors and 5xx responses.`,
 	fl.BoolVar(&opts.dryRun, "dry-run", false, "show what would be uploaded, without uploading")
 	fl.StringVar(&opts.method, "method", "", "upload with \"put\" (default) or the \"components\" API")
 	fl.StringVar(&opts.contentType, "content-type", "", "content type of a single file (default: from the extension)")
-	addConcurrencyFlag(cmd, &opts.concurrency)
+	cmdutil.AddConcurrencyFlag(cmd, &opts.concurrency, "transfers")
 	return cmd
 }
 
 type upItemJSON struct {
-	Source     string     `json:"source"`
-	Repository string     `json:"repository"`
-	Path       string     `json:"path"`
-	Size       *int64     `json:"size"`
-	Reason     string     `json:"reason,omitempty"`
-	Error      *errorJSON `json:"error,omitempty"`
+	Source     string             `json:"source"`
+	Repository string             `json:"repository"`
+	Path       string             `json:"path"`
+	Size       *int64             `json:"size"`
+	Reason     string             `json:"reason,omitempty"`
+	Error      *cmdutil.ErrorJSON `json:"error,omitempty"`
 }
 
 type transferSummary struct {
@@ -118,15 +118,15 @@ func runUp(cmd *cobra.Command, f *cmdutil.Factory, opts *upOptions, args []strin
 	if err != nil {
 		return err
 	}
-	include, err := parsePatterns("--include", opts.include)
+	include, err := cmdutil.ParsePatterns("--include", opts.include)
 	if err != nil {
 		return err
 	}
-	exclude, err := parsePatterns("--exclude", opts.exclude)
+	exclude, err := cmdutil.ParsePatterns("--exclude", opts.exclude)
 	if err != nil {
 		return err
 	}
-	conc, err := concurrency(cmd, f, opts.concurrency)
+	conc, err := cmdutil.Concurrency(cmd, f, opts.concurrency)
 	if err != nil {
 		return err
 	}
@@ -191,7 +191,7 @@ func runUp(cmd *cobra.Command, f *cmdutil.Factory, opts *upOptions, args []strin
 			return output.WriteJSON(f.IO.Out, result, f.IO.IsStdoutTTY())
 		}
 		if human {
-			fmt.Fprintf(f.IO.Out, "%s, %s would be uploaded (dry run)\n", count(len(plan.Items), "file"), output.HumanBytes(total))
+			fmt.Fprintf(f.IO.Out, "%s, %s would be uploaded (dry run)\n", cmdutil.Count(len(plan.Items), "file"), output.HumanBytes(total))
 		}
 		return nil
 	}
@@ -235,7 +235,7 @@ func runUp(cmd *cobra.Command, f *cmdutil.Factory, opts *upOptions, args []strin
 		default:
 			failures = append(failures, err)
 			fj := itemJSON(j.item, j.item.Size)
-			e := itemError(err)
+			e := cmdutil.ItemError(err)
 			fj.Error = &e
 			result.Failed = append(result.Failed, fj)
 			if len(plan.Items) > 1 && !f.JSON() {
@@ -246,20 +246,20 @@ func runUp(cmd *cobra.Command, f *cmdutil.Factory, opts *upOptions, args []strin
 	progress.Stop()
 	took := time.Since(start)
 	result.Summary = transferSummary{
-		Files: len(result.Uploaded), Bytes: sent, Skipped: len(result.Skipped), Failed: len(result.Failed), DurationMS: ms(took),
+		Files: len(result.Uploaded), Bytes: sent, Skipped: len(result.Skipped), Failed: len(result.Failed), DurationMS: cmdutil.Millis(took),
 	}
 	if f.JSON() {
 		if err := output.WriteJSON(f.IO.Out, result, f.IO.IsStdoutTTY()); err != nil {
 			return err
 		}
 	} else if human && len(plan.Items) > 1 {
-		fmt.Fprintf(f.IO.Out, "%s, %s uploaded in %s%s\n", count(len(result.Uploaded), "file"), output.HumanBytes(sent),
-			elapsed(took), extraCounts(len(result.Skipped), len(result.Failed)))
+		fmt.Fprintf(f.IO.Out, "%s, %s uploaded in %s%s\n", cmdutil.Count(len(result.Uploaded), "file"), output.HumanBytes(sent),
+			cmdutil.Elapsed(took), extraCounts(len(result.Skipped), len(result.Failed)))
 	}
-	if err := interrupted(ctx, notStarted); err != nil {
+	if err := cmdutil.Interrupted(ctx, notStarted, "files"); err != nil {
 		return err
 	}
-	return files.BulkError("uploads", len(plan.Items), failures)
+	return errs.Bulk("uploads", len(plan.Items), failures)
 }
 
 func sizeText(n int64) string {

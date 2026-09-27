@@ -237,3 +237,26 @@ func HintsOf(err error) []string {
 	}
 	return nil
 }
+
+// Bulk summarises the failures of a bulk operation of total items, e.g.
+// "2 of 1000 uploads failed". A single item keeps its own error. The kind is
+// that of the failures when all items failed the same way, else KindPartial.
+func Bulk(verb string, total int, failures []error) error {
+	if len(failures) == 0 {
+		return nil
+	}
+	kind := Classify(failures[0])
+	same := len(failures) == total
+	for _, err := range failures[1:] {
+		if Classify(err) != kind {
+			same = false
+		}
+	}
+	if total == 1 {
+		return failures[0]
+	}
+	if !same {
+		kind = KindPartial
+	}
+	return New(kind, "%d of %d %s failed", len(failures), total, verb)
+}

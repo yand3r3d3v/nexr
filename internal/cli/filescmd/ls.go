@@ -339,17 +339,17 @@ func entryJSON(e files.Entry) any {
 	}
 	j := fileJSON{
 		Repository: e.Repository, Path: e.Path, Name: e.Name, Type: "file",
-		ContentType:    nullString(e.ContentType),
-		LastModified:   nullTime(e.LastModified),
-		BlobCreated:    nullTime(e.BlobCreated),
-		LastDownloaded: nullTime(e.LastDownloaded),
-		Uploader:       nullString(e.Uploader),
+		ContentType:    cmdutil.NullString(e.ContentType),
+		LastModified:   cmdutil.NullTime(e.LastModified),
+		BlobCreated:    cmdutil.NullTime(e.BlobCreated),
+		LastDownloaded: cmdutil.NullTime(e.LastDownloaded),
+		Uploader:       cmdutil.NullString(e.Uploader),
 		Checksum: checksumJSON{
-			SHA1: nullString(e.Checksum.SHA1), SHA256: nullString(e.Checksum.SHA256),
-			SHA512: nullString(e.Checksum.SHA512), MD5: nullString(e.Checksum.MD5),
+			SHA1: cmdutil.NullString(e.Checksum.SHA1), SHA256: cmdutil.NullString(e.Checksum.SHA256),
+			SHA512: cmdutil.NullString(e.Checksum.SHA512), MD5: cmdutil.NullString(e.Checksum.MD5),
 		},
-		AssetID:     nullString(e.AssetID),
-		DownloadURL: nullString(e.DownloadURL),
+		AssetID:     cmdutil.NullString(e.AssetID),
+		DownloadURL: cmdutil.NullString(e.DownloadURL),
 	}
 	if e.Size >= 0 {
 		size := e.Size
